@@ -22,6 +22,10 @@
 #include <esp_lcd_panel_ops.h>
 #include <freertos/semphr.h>
 
+#if defined(BOARD_HAS_ST7567) && BOARD_HAS_ST7567
+#include <u8g2_esp32_hal.h>
+#endif
+
 static const char* TAG = "FuriHalDisplay";
 
 /* Display dimensions from board config */
@@ -160,6 +164,18 @@ static void display_paint_rect(
 
 void furi_hal_display_init(void) {
     ESP_LOGI(TAG, "Initializing display for %s", BOARD_NAME);
+#if defined(BOARD_HAS_ST7567) && BOARD_HAS_ST7567
+    /* ST7567 monochrome LCD init using u8g2 */
+    u8g2_esp32_hal_init(U8G2_R0, /* sda= */ GPIO_NUM_8, /* scl= */ GPIO_NUM_18,
+                        /* sda_400kHz= */ 0, /* restore= */ 0);
+    // TODO: Add ST7567 specific GPIO pin setup (CS=IO4, RST=IO5, DC=IO6)
+    u8g2_InitDisplay(&u8g2);
+    u8g2_SetPowerSave(&u8g2, 0);
+    u8g2_ClearDisplay(&u8g2);
+    u8g2_SendBuffer(&u8g2);
+    ESP_LOGI(TAG, "ST7567 display initialized");
+    return;
+#endif
     furi_hal_spi_bus_init();
     if(!lcd_flush_done) {
         lcd_flush_done = xSemaphoreCreateBinary();
@@ -211,7 +227,7 @@ void furi_hal_display_init(void) {
      * ST7789 keeps every register — MADCTL/colour-order, COLMOD, inversion,
      * rotation. That happens after an `esptool` flash *and* after any other
      * firmware that configured the panel differently ran before us. If any of
-     * that lingers the R/B channels end up swapped — Flipper orange shows up as
+     * that lingers the R/b channels end up swapped — Flipper orange shows up as
      * blue — until the user pulls the battery (a real cold boot). So we do what
      * a thorough driver (TFT_eSPI) does on every init: hardware-reset pulse →
      * SWRESET command → full panel init → re-assert COLMOD. After that the panel

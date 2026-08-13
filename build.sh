@@ -16,16 +16,19 @@ declare -A TARGETS=(
     ["esp32s3"]="esp32s3"
     ["waveshare_c6"]="esp32c6"
     ["t_embed"]="esp32s3"
+    ["Delphus"]="esp32s3"
 )
 declare -A NAMES=(
     ["esp32s3"]="esp32s3_generic"
     ["waveshare_c6"]="waveshare_c6_1.9"
     ["t_embed"]="lilygo_t_embed_cc1101"
+    ["Delphus"]="esp32s3_generic"
 )
 declare -A DIRS=(
     ["esp32s3"]="build_s3"
     ["waveshare_c6"]="build_waveshare_c6"
     ["t_embed"]="build_t_embed"
+    ["Delphus"]="build_Delphus"
 )
 
 usage() {
