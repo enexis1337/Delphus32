@@ -406,19 +406,18 @@ void furi_hal_power_shutdown(void) {
     }
     vTaskDelay(pdMS_TO_TICKS(200)); /* debounce */
 
-    /* Backlight + panel off.
-     *
-     * Deliberately NO gpio_hold_en() / gpio_deep_sleep_hold_en() here. Holding
-     * digital IOs across deep sleep makes esp_deep_sleep_start() run
-     * esp_sleep_isolate_digital_gpio(), which assert-fails with "the stack of the
-     * task calling esp_deep_sleep_start must be in internal ram" — and the
-     * power-service FuriThread stack lives in PSRAM (SPIRAM_ALLOW_STACK_EXTERNAL
-     * + SPIRAM_MALLOC_ALWAYSINTERNAL=1024 pushes the 4 KB stack external). That
-     * assert panicked (reset_reason=4) and rebooted on every power-off. Without
-     * the hold, the isolation step is skipped and deep sleep starts cleanly. */
+    /* Cut the backlight: the LEDC PWM duty is irrelevant once the peripheral
+     * powers down in deep sleep, so drive the pin to its OFF level and latch it
+     * with gpio_hold so it does not float back ON (the backlight LED is the
+     * single biggest idle drain at ~20-60 mA). */
 #ifdef BOARD_PIN_LCD_BL
     furi_hal_display_set_backlight(0);
+    gpio_set_direction((gpio_num_t)BOARD_PIN_LCD_BL, GPIO_MODE_OUTPUT);
+    gpio_set_level((gpio_num_t)BOARD_PIN_LCD_BL, BOARD_LCD_BL_ACTIVE_LOW ? 1 : 0);
+    gpio_hold_en((gpio_num_t)BOARD_PIN_LCD_BL);
 #endif
+
+    /* Put the ST7789 panel to sleep (SLPIN) — saves another ~10-15 mA. */
     furi_hal_display_sleep();
 
     /* Power down peripherals (CC1101 + WS2812) */
@@ -426,32 +425,20 @@ void furi_hal_power_shutdown(void) {
     gpio_set_level((gpio_num_t)BOARD_PIN_PWR_EN, 0);
 #endif
 
-    /* Wake on the BOOT/encoder button (GPIO0, active low). Its external
-     * boot-strapping pull-up keeps it HIGH across deep sleep, so it does not
-     * re-wake immediately — unlike the side key (GPIO6), which floats LOW and
-     * rebooted the device instantly (regression from the multi-boot PR). */
+    /* Keep the held GPIO levels latched across deep sleep. Only needed on
+     * targets without per-pin deep-sleep hold (e.g. ESP32-S3): there the
+     * global latch arms the gpio_hold_en() above. Targets that support
+     * single-IO hold in deep sleep (e.g. ESP32-C6) latch per pin already and
+     * don't provide gpio_deep_sleep_hold_en() — matches gpio.h's guard. */
+#if SOC_GPIO_SUPPORT_HOLD_IO_IN_DSLP && !SOC_GPIO_SUPPORT_HOLD_SINGLE_IO_IN_DSLP
+    gpio_deep_sleep_hold_en();
+#endif
+
+    /* Configure BOOT/encoder button (GPIO0) as wake-up source (active low) */
 #if SOC_PM_SUPPORT_EXT0_WAKEUP
     esp_sleep_enable_ext0_wakeup((gpio_num_t)BOARD_PIN_BUTTON_BOOT, 0);
 #else
     esp_deep_sleep_enable_gpio_wakeup(BIT(BOARD_PIN_BUTTON_BOOT), ESP_GPIO_WAKEUP_GPIO_LOW);
-#endif
-    /* Clear the deep-sleep GPIO auto-hold bit. It lives in the RTC domain
-     * (RTC_CNTL_DIG_ISO_REG) and SURVIVES resets/panics, so a firmware that once
-     * called gpio_deep_sleep_hold_en() leaves it set for every later boot. While
-     * it is set, esp_deep_sleep_start() runs esp_sleep_isolate_digital_gpio(),
-     * which assert-fails because our power-service stack is in PSRAM -> panic ->
-     * reboot. Only a full power-cycle would clear it otherwise, which is exactly
-     * why the reboot persisted across re-flashes. Disabling it unconditionally
-     * makes power-off deterministic regardless of what ran before.
-     *
-     * Guarded by the exact same SOC caps that gate the function's definition in
-     * esp-idf (esp_driver_gpio/src/gpio.c): it only exists for chips with global
-     * (non-single-IO) deep-sleep hold, i.e. the ESP32-S3. On the ESP32-C6
-     * (SOC_GPIO_SUPPORT_HOLD_SINGLE_IO_IN_DSLP=1) the symbol is absent and the
-     * whole auto-hold problem never applied, so skipping it keeps the C6 build
-     * linking. */
-#if SOC_GPIO_SUPPORT_HOLD_IO_IN_DSLP && !SOC_GPIO_SUPPORT_HOLD_SINGLE_IO_IN_DSLP
-    gpio_deep_sleep_hold_dis();
 #endif
     esp_deep_sleep_start();
 }

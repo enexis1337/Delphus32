@@ -13,7 +13,10 @@ typedef struct {
     BleHid* ble_hid;
 } BleProfileHid;
 
-/* BleProfileHidParams now lives in hid_profile.h (public API). */
+typedef struct {
+    uint16_t mac_xor;
+    const char* device_name_prefix;
+} BleProfileHidParams;
 
 static void ble_profile_hid_reverse_mac(
     uint8_t dst[GAP_MAC_ADDR_SIZE],

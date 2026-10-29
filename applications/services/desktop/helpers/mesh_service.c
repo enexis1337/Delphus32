@@ -16,6 +16,7 @@
 #include <esp_event.h>
 #include <esp_mac.h>
 #include <esp_heap_caps.h>
+#include <esp_idf_version.h>
 
 #define TAG "MeshSvc"
 
@@ -184,12 +185,21 @@ static bool mesh_enqueue(const uint8_t mac[MESH_MAC_LEN], const uint8_t* data, u
 
 /* ─────── ESP-NOW callbacks (run in WiFi-internal task context) ─────── */
 
+#if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 5, 0)
+static void on_send_cb(const esp_now_send_info_t* tx_info, esp_now_send_status_t status) {
+    (void)tx_info;
+    if(status != ESP_NOW_SEND_SUCCESS) {
+        FURI_LOG_D(TAG, "send fail");
+    }
+}
+#else
 static void on_send_cb(const uint8_t* mac, esp_now_send_status_t status) {
     (void)mac;
     if(status != ESP_NOW_SEND_SUCCESS) {
         FURI_LOG_D(TAG, "send fail");
     }
 }
+#endif
 
 static void on_recv_cb(const esp_now_recv_info_t* info, const uint8_t* data, int len) {
     if(!info || !data || len < 2) return;

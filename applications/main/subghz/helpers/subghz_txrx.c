@@ -106,7 +106,7 @@ void subghz_txrx_set_preset(
     uint8_t* preset_data,
     size_t preset_data_size) {
     furi_assert(instance);
-    furi_string_set(instance->preset->name, preset_name);
+    furi_string_set(instance->preset->name, preset_name ? preset_name : "AM650");
 
     SubGhzRadioPreset* preset = instance->preset;
     preset->frequency = frequency;
@@ -120,6 +120,10 @@ uint8_t*
 #define PRESET_POWER_OFFSET_AM 7
 #define TX_PATABLE_OFFSET_AM   8
 #define TX_PATABLE_COUNT       17
+
+    if(!preset_data || preset_data_size < PRESET_POWER_OFFSET_FM) {
+        return preset_data;
+    }
 
     //I had to skip the +10dBM and -6dBm Values, use only ones AM/FM have in common.
     //Highest Value is 12dBm for AM, 10 for FM. So Menu needs to reflect that.
@@ -683,9 +687,12 @@ const char* subghz_txrx_set_preset_internal(
     uint8_t tx_power) {
     furi_assert(instance);
 
-    //Grab the prset name.
+    //Grab the preset name.
     SubGhzSetting* setting = subghz_txrx_get_setting(instance);
     const char* preset_name = subghz_setting_get_preset_name(setting, index);
+    if(!preset_name) {
+        preset_name = "AM650";
+    }
     subghz_setting_set_default_frequency(setting, frequency);
 
     //Get the preset data now so we can set TX power.
@@ -693,7 +700,9 @@ const char* subghz_txrx_set_preset_internal(
     size_t preset_data_size = subghz_setting_get_preset_data_size(setting, index);
 
     //Edit TX power, if necessary.
-    subghz_txrx_set_tx_power(preset_data, preset_data_size, tx_power);
+    if(preset_data && preset_data_size >= PRESET_POWER_OFFSET_FM) {
+        subghz_txrx_set_tx_power(preset_data, preset_data_size, tx_power);
+    }
 
     //Set the Updated Preset.
     subghz_txrx_set_preset(instance, preset_name, frequency, preset_data, preset_data_size);

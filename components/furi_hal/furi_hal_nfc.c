@@ -609,8 +609,8 @@ static FuriHalNfcEvent pn532_type4_ndef_emulate(void) {
         0x44, 0x33, 0x22, 0x11, 0x01, 0x00, 0x0D, 0x52, 0x46, 0x49, 0x44, 0x49,
         0x4F, 0x74, 0x20, 0x50, 0x4E, 0x35, 0x33, 0x32};
     /* Do NOT override SENS_RES / NFCID1 with the scanned tag's ATQA/UID.
-     * The known-working Bruce reference (same PN532 HW, its PN532.cpp
-     * tgInitAsTargetIrq) uses these FIXED defaults — overriding
+     * The known-working Bruce reference (same PN532 HW, multi-boot/bruce
+     * PN532.cpp tgInitAsTargetIrq) uses these FIXED defaults — overriding
      * SENS_RES with e.g. NTAG213's ATQA produced an invalid value (00 44)
      * that the phone never activates. For Type-4 ISO-DEP NDEF the reader
      * only needs a valid ISO14443-4 PICC (SEL_RES=0x60), not a UID clone. */
@@ -1954,5 +1954,9 @@ FuriHalNfcError furi_hal_nfc_pn532_mf_auth(uint8_t b, const uint8_t* k, uint8_t 
 }
 bool furi_hal_nfc_pn532_mf_is_authed(void) { return false; }
 void furi_hal_nfc_pn532_mf_deauth(void) {}
+void furi_hal_nfc_emu_set_ndef(const uint8_t* msg, size_t len) {
+    UNUSED(msg);
+    UNUSED(len);
+}
 
 #endif /* BOARD_HAS_NFC */

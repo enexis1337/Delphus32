@@ -68,6 +68,8 @@ void furi_hal_subghz_stop_async_tx(void);
 
 void furi_hal_subghz_set_ext_leds_and_amp(bool enabled);
 bool furi_hal_subghz_get_ext_leds_and_amp(void);
+bool furi_hal_subghz_is_connected(void);
+bool furi_hal_subghz_check_alive(char* report, size_t report_size);
 
 #ifdef __cplusplus
 }

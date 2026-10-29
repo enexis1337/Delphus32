@@ -93,6 +93,9 @@ typedef struct {
      * Controls whether the "#RRGGBB" entry is offered in the UI Background
      * value cycle (it persists as a selectable preset until replaced). */
     bool ui_custom_color_set;
+    /* LCD contrast value (0..63) for monochrome displays (e.g. ST7567).
+     * Defaults to BOARD_LCD_CONTRAST (26). */
+    uint8_t lcd_contrast;
 } NotificationSettings;
 
 struct NotificationApp {

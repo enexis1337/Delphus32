@@ -1,13 +1,12 @@
 #include "porsche_touareg.h"
-#include "protocols_common.h"
 #include <string.h>
 
 // Original implementation by @lupettohf
 
 #define PORSCHE_CAYENNE_BIT_COUNT 64
-#define PC_TE_SYNC                3370U
-#define PC_TE_GAP                 5930U
-#define PC_SYNC_MIN               15
+#define PC_TE_SYNC 3370U
+#define PC_TE_GAP 5930U
+#define PC_SYNC_MIN 15
 
 static const SubGhzBlockConst subghz_protocol_porsche_cayenne_const = {
     .te_short = 1680,
@@ -53,11 +52,11 @@ static void porsche_cayenne_compute_frame(
     uint8_t r_m = b1;
     uint8_t r_l = b2;
 
-#define ROTATE24(rh, rm, rl)                 \
-    do {                                     \
-        uint8_t _ch = ((rh) >> 7) & 1U;      \
-        uint8_t _cm = ((rm) >> 7) & 1U;      \
-        uint8_t _cl = ((rl) >> 7) & 1U;      \
+#define ROTATE24(rh, rm, rl)            \
+    do {                                \
+        uint8_t _ch = ((rh) >> 7) & 1U; \
+        uint8_t _cm = ((rm) >> 7) & 1U; \
+        uint8_t _cl = ((rl) >> 7) & 1U; \
         (rh) = (uint8_t)(((rh) << 1) | _cm); \
         (rm) = (uint8_t)(((rm) << 1) | _cl); \
         (rl) = (uint8_t)(((rl) << 1) | _ch); \
@@ -89,8 +88,8 @@ static void porsche_cayenne_compute_frame(
     pkt[2] = b2;
     pkt[3] = b3;
     pkt[4] = (uint8_t)(((a9a >> 2) & 0x3F) | ((~cnt_lo & 0x03U) << 6));
-    pkt[5] = (uint8_t)((~cnt_lo & 0xC0U) | ((a9a & 0x03U) << 4) | (a9b & 0x0CU) |
-                       ((~cnt_lo >> 2) & 0x03U));
+    pkt[5] = (uint8_t)(
+        (~cnt_lo & 0xC0U) | ((a9a & 0x03U) << 4) | (a9b & 0x0CU) | ((~cnt_lo >> 2) & 0x03U));
     pkt[6] = (uint8_t)(((a9b & 0x03U) << 6) | ((a9c >> 2) & 0x3CU) | ((~cnt_lo >> 4) & 0x03U));
     pkt[7] = (uint8_t)(((a9b >> 4) & 0x0FU) | ((a9c & 0x0FU) << 4));
 }
@@ -137,7 +136,7 @@ static void porsche_cayenne_publish_frame(SubGhzProtocolDecoderPorscheCayenne* i
 
 const SubGhzProtocolDecoder subghz_protocol_porsche_cayenne_decoder = {
     .alloc = subghz_protocol_decoder_porsche_cayenne_alloc,
-    .free = pp_decoder_free_default,
+    .free = subghz_protocol_decoder_porsche_cayenne_free,
     .feed = subghz_protocol_decoder_porsche_cayenne_feed,
     .reset = subghz_protocol_decoder_porsche_cayenne_reset,
     .get_hash_data = subghz_protocol_decoder_porsche_cayenne_get_hash_data,
@@ -157,18 +156,10 @@ const SubGhzProtocolEncoder subghz_protocol_porsche_cayenne_encoder = {
 const SubGhzProtocol porsche_touareg_protocol = {
     .name = PORSCHE_CAYENNE_PROTOCOL_NAME,
     .type = SubGhzProtocolTypeDynamic,
-    .flag = SubGhzProtocolFlag_315 | SubGhzProtocolFlag_433 | SubGhzProtocolFlag_AM |
+    .flag = SubGhzProtocolFlag_433 | SubGhzProtocolFlag_868 | SubGhzProtocolFlag_AM |
             SubGhzProtocolFlag_Decodable | SubGhzProtocolFlag_Load | SubGhzProtocolFlag_Save,
-#if PROTOPIRATE_WITH_DECODER
     .decoder = &subghz_protocol_porsche_cayenne_decoder,
-#else
-    .decoder = NULL,
-#endif
-#if PROTOPIRATE_WITH_ENCODER
     .encoder = &subghz_protocol_porsche_cayenne_encoder,
-#else
-    .encoder = NULL,
-#endif
 };
 
 void* subghz_protocol_decoder_porsche_cayenne_alloc(SubGhzEnvironment* environment) {
@@ -179,6 +170,12 @@ void* subghz_protocol_decoder_porsche_cayenne_alloc(SubGhzEnvironment* environme
     instance->base.protocol = &porsche_touareg_protocol;
     instance->generic.protocol_name = instance->base.protocol->name;
     return instance;
+}
+
+void subghz_protocol_decoder_porsche_cayenne_free(void* context) {
+    furi_check(context);
+    SubGhzProtocolDecoderPorscheCayenne* instance = context;
+    free(instance);
 }
 
 void subghz_protocol_decoder_porsche_cayenne_reset(void* context) {
@@ -214,8 +211,7 @@ void subghz_protocol_decoder_porsche_cayenne_feed(void* context, bool level, uin
             if(DURATION_DIFF(duration, PC_TE_SYNC) < te_delta) {
                 // keep collecting sync pairs
             } else if(
-                instance->sync_count >= PC_SYNC_MIN &&
-                DURATION_DIFF(duration, PC_TE_GAP) < te_delta) {
+                instance->sync_count >= PC_SYNC_MIN && DURATION_DIFF(duration, PC_TE_GAP) < te_delta) {
                 instance->decoder.parser_step = PorscheCayenneDecoderStepGapLow;
             } else {
                 instance->decoder.parser_step = PorscheCayenneDecoderStepReset;
@@ -224,8 +220,7 @@ void subghz_protocol_decoder_porsche_cayenne_feed(void* context, bool level, uin
             if(DURATION_DIFF(duration, PC_TE_SYNC) < te_delta) {
                 instance->sync_count++;
             } else if(
-                instance->sync_count >= PC_SYNC_MIN &&
-                DURATION_DIFF(duration, PC_TE_GAP) < te_delta) {
+                instance->sync_count >= PC_SYNC_MIN && DURATION_DIFF(duration, PC_TE_GAP) < te_delta) {
                 instance->decoder.parser_step = PorscheCayenneDecoderStepGapHigh;
             } else {
                 instance->decoder.parser_step = PorscheCayenneDecoderStepReset;
@@ -302,13 +297,12 @@ SubGhzProtocolStatus subghz_protocol_decoder_porsche_cayenne_serialize(
     SubGhzProtocolStatus ret =
         subghz_block_generic_serialize(&instance->generic, flipper_format, preset);
     if(ret == SubGhzProtocolStatusOk) {
-        pp_serialize_fields(
-            flipper_format,
-            PP_FIELD_SERIAL | PP_FIELD_BTN | PP_FIELD_CNT,
-            instance->generic.serial & 0xFFFFFF,
-            instance->generic.btn,
-            instance->generic.cnt,
-            0);
+        uint32_t serial = instance->generic.serial & 0xFFFFFF;
+        flipper_format_write_uint32(flipper_format, "Serial", &serial, 1);
+        uint32_t cnt = instance->generic.cnt;
+        flipper_format_write_uint32(flipper_format, "Cnt", &cnt, 1);
+        uint32_t btn = instance->generic.btn;
+        flipper_format_write_uint32(flipper_format, "Btn", &btn, 1);
     }
 
     return ret;
@@ -329,17 +323,17 @@ SubGhzProtocolStatus subghz_protocol_decoder_porsche_cayenne_deserialize(
         porsche_cayenne_parse_data(instance);
 
         uint32_t serial = 0;
-        if(flipper_format_read_uint32(flipper_format, FF_SERIAL, &serial, 1)) {
+        if(flipper_format_read_uint32(flipper_format, "Serial", &serial, 1)) {
             instance->generic.serial = serial & 0xFFFFFF;
         }
 
         uint32_t cnt = 0;
-        if(flipper_format_read_uint32(flipper_format, FF_CNT, &cnt, 1)) {
+        if(flipper_format_read_uint32(flipper_format, "Cnt", &cnt, 1)) {
             instance->generic.cnt = cnt;
         }
 
         uint32_t btn = 0;
-        if(flipper_format_read_uint32(flipper_format, FF_BTN, &btn, 1)) {
+        if(flipper_format_read_uint32(flipper_format, "Btn", &btn, 1)) {
             instance->generic.btn = (uint8_t)btn;
         }
     }

@@ -22,10 +22,6 @@
 #include <esp_lcd_panel_ops.h>
 #include <freertos/semphr.h>
 
-#if defined(BOARD_HAS_ST7567) && BOARD_HAS_ST7567
-#include <u8g2_esp32_hal.h>
-#endif
-
 static const char* TAG = "FuriHalDisplay";
 
 /* Display dimensions from board config */
@@ -36,25 +32,10 @@ static const char* TAG = "FuriHalDisplay";
 #define FB_WIDTH  128
 #define FB_HEIGHT 64
 
-/* Always-on left/right inset (in physical LCD pixels) kept as plain background
- * color so the UI never sits flush against the screen's left/right edges. A
- * board may override this in its board.h; otherwise this default applies
- * everywhere. Set to 0 to disable. */
-#ifndef BOARD_LCD_SIDE_MARGIN
-#define BOARD_LCD_SIDE_MARGIN 4
-#endif
-#define DISPLAY_SIDE_MARGIN BOARD_LCD_SIDE_MARGIN
-
-/* Horizontal resolution actually available to the UI after reserving the
- * left/right margins. The aspect-fit below scales into this, then the result
- * is centered across the full LCD resolution — so the leftover on each side
- * is always >= the margin and is painted with the background color. */
-#define USABLE_H_RES (LCD_H_RES - 2 * DISPLAY_SIDE_MARGIN)
-
 /* Scale the 128x64 framebuffer to the largest centered size that keeps aspect ratio. */
-#if (USABLE_H_RES * FB_HEIGHT) <= (LCD_V_RES * FB_WIDTH)
-#define SCALED_WIDTH  USABLE_H_RES
-#define SCALED_HEIGHT ((USABLE_H_RES * FB_HEIGHT) / FB_WIDTH)
+#if (LCD_H_RES * FB_HEIGHT) <= (LCD_V_RES * FB_WIDTH)
+#define SCALED_WIDTH  LCD_H_RES
+#define SCALED_HEIGHT ((LCD_H_RES * FB_HEIGHT) / FB_WIDTH)
 #else
 #define SCALED_HEIGHT LCD_V_RES
 #define SCALED_WIDTH  ((LCD_V_RES * FB_WIDTH) / FB_HEIGHT)
@@ -81,6 +62,14 @@ static uint16_t bg_color;
 #define STRIPE_HEIGHT 8
 
 static esp_lcd_panel_handle_t panel_handle = NULL;
+#if defined(BOARD_LCD_IS_ST7567) && BOARD_LCD_IS_ST7567
+static esp_lcd_panel_io_handle_t st7567_io_handle = NULL;
+static uint8_t* st7567_dma_buf = NULL;
+#ifndef BOARD_LCD_CONTRAST
+#define BOARD_LCD_CONTRAST 26
+#endif
+static uint8_t st7567_contrast = BOARD_LCD_CONTRAST;
+#endif
 static uint16_t* rgb565_buf = NULL; // STRIPE_HEIGHT lines only
 static SemaphoreHandle_t lcd_flush_done = NULL;
 static uint8_t x_scale_lut[SCALED_WIDTH];
@@ -146,7 +135,7 @@ static void display_fill_color(uint16_t color) {
  * commit path to keep the LCD margins in sync with fg_color changes. */
 static void display_paint_rect(
     size_t x, size_t y, size_t w, size_t h, uint16_t color) {
-    if(w == 0 || h == 0 || w > LCD_H_RES) return;
+    if(w == 0 || h == 0 || w > SCALED_WIDTH) return;
 
     for(size_t y_off = 0; y_off < h; y_off += STRIPE_HEIGHT) {
         size_t chunk_h = h - y_off;
@@ -164,18 +153,6 @@ static void display_paint_rect(
 
 void furi_hal_display_init(void) {
     ESP_LOGI(TAG, "Initializing display for %s", BOARD_NAME);
-#if defined(BOARD_HAS_ST7567) && BOARD_HAS_ST7567
-    /* ST7567 monochrome LCD init using u8g2 */
-    u8g2_esp32_hal_init(U8G2_R0, /* sda= */ GPIO_NUM_8, /* scl= */ GPIO_NUM_18,
-                        /* sda_400kHz= */ 0, /* restore= */ 0);
-    // TODO: Add ST7567 specific GPIO pin setup (CS=IO4, RST=IO5, DC=IO6)
-    u8g2_InitDisplay(&u8g2);
-    u8g2_SetPowerSave(&u8g2, 0);
-    u8g2_ClearDisplay(&u8g2);
-    u8g2_SendBuffer(&u8g2);
-    ESP_LOGI(TAG, "ST7567 display initialized");
-    return;
-#endif
     furi_hal_spi_bus_init();
     if(!lcd_flush_done) {
         lcd_flush_done = xSemaphoreCreateBinary();
@@ -189,13 +166,107 @@ void furi_hal_display_init(void) {
         .sclk_io_num = gpio_lcd_clk.pin,
         .quadwp_io_num = -1,
         .quadhd_io_num = -1,
-        .max_transfer_sz = LCD_H_RES * STRIPE_HEIGHT * sizeof(uint16_t),
+        .max_transfer_sz = SCALED_WIDTH * STRIPE_HEIGHT * sizeof(uint16_t),
     };
     esp_err_t spi_err = spi_bus_initialize(LCD_SPI_HOST, &bus_cfg, SPI_DMA_CH_AUTO);
     /* ESP_ERR_INVALID_STATE is OK — bus may already be initialized by SubGHz on shared-bus boards */
     if(spi_err != ESP_OK && spi_err != ESP_ERR_INVALID_STATE) {
         ESP_ERROR_CHECK(spi_err);
     }
+
+#if defined(BOARD_LCD_IS_ST7567) && BOARD_LCD_IS_ST7567
+    /* 1) Hardware reset pulse on RESX */
+    if(gpio_lcd_rst.pin != UINT16_MAX) {
+        gpio_config_t rst_cfg = {
+            .mode = GPIO_MODE_OUTPUT,
+            .pin_bit_mask = 1ULL << gpio_lcd_rst.pin,
+        };
+        gpio_config(&rst_cfg);
+        gpio_set_level((gpio_num_t)gpio_lcd_rst.pin, 1);
+        vTaskDelay(pdMS_TO_TICKS(10));
+        gpio_set_level((gpio_num_t)gpio_lcd_rst.pin, 0);
+        vTaskDelay(pdMS_TO_TICKS(20));
+        gpio_set_level((gpio_num_t)gpio_lcd_rst.pin, 1);
+        vTaskDelay(pdMS_TO_TICKS(50));
+    }
+
+    /* 2) Create panel IO (SPI) for ST7567 */
+    esp_lcd_panel_io_spi_config_t st7567_io_cfg = {
+        .dc_gpio_num = gpio_lcd_dc.pin,
+        .cs_gpio_num = gpio_lcd_cs.pin,
+        .pclk_hz = LCD_SPI_FREQ,
+        .lcd_cmd_bits = LCD_CMD_BITS,
+        .lcd_param_bits = LCD_PARAM_BITS,
+        .spi_mode = 0,
+        .trans_queue_depth = 16,
+        .on_color_trans_done = furi_hal_display_flush_done_callback,
+        .user_ctx = NULL,
+    };
+    ESP_ERROR_CHECK(esp_lcd_new_panel_io_spi(LCD_SPI_HOST, &st7567_io_cfg, &st7567_io_handle));
+
+    /* 3) ST7567 initialization command sequence */
+    esp_lcd_panel_io_tx_param(st7567_io_handle, 0xE2 /* Soft Reset */, NULL, 0);
+    vTaskDelay(pdMS_TO_TICKS(10));
+
+    /* Bias: 0xA2 (1/9 bias) */
+    esp_lcd_panel_io_tx_param(st7567_io_handle, 0xA2, NULL, 0);
+
+    /* Segment direction (ADC select): 0xA0 normal, 0xA1 reverse */
+    uint8_t seg_dir = BOARD_LCD_MIRROR_X ? 0xA1 : 0xA0;
+    esp_lcd_panel_io_tx_param(st7567_io_handle, seg_dir, NULL, 0);
+
+    /* COM direction: 0xC0 normal, 0xC8 reverse */
+    uint8_t com_dir = BOARD_LCD_MIRROR_Y ? 0xC0 : 0xC8;
+    esp_lcd_panel_io_tx_param(st7567_io_handle, com_dir, NULL, 0);
+
+    /* Power Control: Booster ON (0x2C), Regulator ON (0x2E), Follower ON (0x2F) */
+    esp_lcd_panel_io_tx_param(st7567_io_handle, 0x2C, NULL, 0);
+    vTaskDelay(pdMS_TO_TICKS(5));
+    esp_lcd_panel_io_tx_param(st7567_io_handle, 0x2E, NULL, 0);
+    vTaskDelay(pdMS_TO_TICKS(5));
+    esp_lcd_panel_io_tx_param(st7567_io_handle, 0x2F, NULL, 0);
+    vTaskDelay(pdMS_TO_TICKS(5));
+
+    /* Regulation Ratio: 0x20..0x27 (0x25 is standard) */
+    esp_lcd_panel_io_tx_param(st7567_io_handle, 0x25, NULL, 0);
+
+    /* Electronic Volume (Contrast): 0x81 followed by contrast value (0x00..0x3F) */
+    esp_lcd_panel_io_tx_param(st7567_io_handle, 0x81, NULL, 0);
+    esp_lcd_panel_io_tx_param(st7567_io_handle, st7567_contrast, NULL, 0);
+
+    /* Display start line: 0x40 (Line 0) */
+    esp_lcd_panel_io_tx_param(st7567_io_handle, 0x40, NULL, 0);
+
+    /* Invert mode: 0xA6 normal, 0xA7 inverse */
+    esp_lcd_panel_io_tx_param(st7567_io_handle, BOARD_LCD_INVERT_COLOR ? 0xA7 : 0xA6, NULL, 0);
+
+    /* All pixels normal: 0xA4 */
+    esp_lcd_panel_io_tx_param(st7567_io_handle, 0xA4, NULL, 0);
+
+    /* Display ON: 0xAF */
+    esp_lcd_panel_io_tx_param(st7567_io_handle, 0xAF, NULL, 0);
+
+    /* Allocate DMA buffer */
+    st7567_dma_buf = heap_caps_malloc(1024, MALLOC_CAP_DMA);
+    if(!st7567_dma_buf) {
+        st7567_dma_buf = malloc(1024);
+    }
+    if(st7567_dma_buf) {
+        memset(st7567_dma_buf, 0, 1024);
+        /* Clear all 8 pages of ST7567 display RAM on boot */
+        for(uint8_t page = 0; page < 8; page++) {
+            esp_lcd_panel_io_tx_param(st7567_io_handle, 0xB0 | page, NULL, 0);
+            esp_lcd_panel_io_tx_param(st7567_io_handle, 0x10, NULL, 0);
+            esp_lcd_panel_io_tx_param(st7567_io_handle, 0x00, NULL, 0);
+            furi_hal_display_prepare_flush();
+            esp_lcd_panel_io_tx_color(st7567_io_handle, -1, st7567_dma_buf, 128);
+            furi_hal_display_wait_flush();
+        }
+    }
+
+    ESP_LOGI(TAG, "ST7567 Mono Display Initialized (128x64)");
+    return;
+#endif
 
     /* Create panel IO (SPI) */
     esp_lcd_panel_io_handle_t io_handle = NULL;
@@ -225,13 +296,14 @@ void furi_hal_display_init(void) {
     /* --- Bring the ST7789 to a known-clean state, every boot --------------
      * A software reset (esp_restart) does NOT power-cycle the display: the
      * ST7789 keeps every register — MADCTL/colour-order, COLMOD, inversion,
-     * rotation. That happens after an `esptool` flash *and* after any other
-     * firmware that configured the panel differently ran before us. If any of
-     * that lingers the R/b channels end up swapped — Flipper orange shows up as
-     * blue — until the user pulls the battery (a real cold boot). So we do what
-     * a thorough driver (TFT_eSPI) does on every init: hardware-reset pulse →
-     * SWRESET command → full panel init → re-assert COLMOD. After that the panel
-     * is in *our* configuration regardless of what ran before. */
+     * rotation. That happens after an `esptool` flash *and* after switching
+     * back from the Bruce firmware (multi-boot). Bruce/TFT_eSPI configures
+     * the panel differently, and if any of that lingers the R/B channels end
+     * up swapped — Flipper orange shows up as blue — until the user pulls the
+     * battery (a real cold boot). So we do what a thorough driver (TFT_eSPI)
+     * does on every init: hardware-reset pulse → SWRESET command → full panel
+     * init → re-assert COLMOD. After that the panel is in *our* configuration
+     * regardless of what ran before. */
 
     /* 1) Hardware reset pulse on RESX (HIGH → LOW → HIGH, generous timing). */
     gpio_config_t rst_cfg = {
@@ -284,10 +356,8 @@ void furi_hal_display_init(void) {
 
     furi_hal_display_init_scale_lut();
 
-    /* Allocate DMA-capable RGB565 stripe buffer (STRIPE_HEIGHT lines only).
-     * Sized to the full LCD width so the same scratch buffer can paint the
-     * full-width top/bottom margin strips as well as the scaled UI stripes. */
-    size_t stripe_bytes = LCD_H_RES * STRIPE_HEIGHT * sizeof(uint16_t);
+    /* Allocate DMA-capable RGB565 stripe buffer (STRIPE_HEIGHT lines only) */
+    size_t stripe_bytes = SCALED_WIDTH * STRIPE_HEIGHT * sizeof(uint16_t);
     rgb565_buf = heap_caps_malloc(stripe_bytes, MALLOC_CAP_DMA);
     if(!rgb565_buf) {
         ESP_LOGE(TAG, "Failed to allocate RGB565 stripe buffer (%d bytes)",
@@ -303,6 +373,30 @@ void furi_hal_display_init(void) {
 }
 
 void furi_hal_display_commit(const uint8_t* data, uint32_t size) {
+#if defined(BOARD_LCD_IS_ST7567) && BOARD_LCD_IS_ST7567
+    UNUSED(size);
+    if(!st7567_io_handle || !data) return;
+
+    furi_hal_spi_bus_lock();
+    if(st7567_dma_buf) {
+        memcpy(st7567_dma_buf, data, 1024);
+    }
+    const uint8_t* src = st7567_dma_buf ? st7567_dma_buf : data;
+    uint8_t col_offset = BOARD_LCD_GAP_X;
+
+    for(uint8_t page = 0; page < 8; page++) {
+        esp_lcd_panel_io_tx_param(st7567_io_handle, 0xB0 | page, NULL, 0);
+        esp_lcd_panel_io_tx_param(st7567_io_handle, 0x10 | ((col_offset >> 4) & 0x0F), NULL, 0);
+        esp_lcd_panel_io_tx_param(st7567_io_handle, 0x00 | (col_offset & 0x0F), NULL, 0);
+        if(page == 7) {
+            furi_hal_display_prepare_flush();
+        }
+        esp_lcd_panel_io_tx_color(st7567_io_handle, -1, src + (page * 128), 128);
+    }
+    furi_hal_display_wait_flush();
+    furi_hal_spi_bus_unlock();
+    return;
+#endif
     UNUSED(size);
     if(!panel_handle || !rgb565_buf || !data) return;
 
@@ -318,25 +412,16 @@ void furi_hal_display_commit(const uint8_t* data, uint32_t size) {
      */
     furi_hal_spi_bus_lock();
 
-    /* Repaint the margin strips with the current fg_color every frame so the
-     * entire screen tracks UI Color changes. Without this the init-time fill
-     * persists and the margins keep showing the boot-time orange while the
-     * central framebuffer area updates.
-     *
-     * Top/bottom strips span the full width; left/right strips (the always-on
-     * DISPLAY_SIDE_MARGIN inset, plus any extra from aspect-fit centering) span
-     * only the height of the scaled image so they don't overdraw the corners. */
+    /* Repaint top/bottom margin strips with the current fg_color every frame
+     * so the entire screen tracks UI Color changes. Without this the init-time
+     * fill persists and the margins keep showing the boot-time orange while
+     * the central framebuffer area updates. Side strips (MARGIN_X) skipped;
+     * SCALED_WIDTH = LCD_H_RES on T-Embed Plus so MARGIN_X=0 in practice. */
     if(MARGIN_Y > 0) {
-        display_paint_rect(0, 0, LCD_H_RES, MARGIN_Y, fg_color);
+        display_paint_rect(MARGIN_X, 0, SCALED_WIDTH, MARGIN_Y, fg_color);
         display_paint_rect(
-            0, MARGIN_Y + SCALED_HEIGHT,
-            LCD_H_RES, LCD_V_RES - MARGIN_Y - SCALED_HEIGHT, fg_color);
-    }
-    if(MARGIN_X > 0) {
-        display_paint_rect(0, MARGIN_Y, MARGIN_X, SCALED_HEIGHT, fg_color);
-        display_paint_rect(
-            MARGIN_X + SCALED_WIDTH, MARGIN_Y,
-            LCD_H_RES - MARGIN_X - SCALED_WIDTH, SCALED_HEIGHT, fg_color);
+            MARGIN_X, MARGIN_Y + SCALED_HEIGHT,
+            SCALED_WIDTH, LCD_V_RES - MARGIN_Y - SCALED_HEIGHT, fg_color);
     }
 
     for(size_t stripe_y = 0; stripe_y < SCALED_HEIGHT; stripe_y += STRIPE_HEIGHT) {
@@ -377,7 +462,51 @@ void furi_hal_display_set_backlight(uint8_t brightness) {
     furi_hal_light_set(LightBacklight, brightness);
 }
 
+bool furi_hal_display_is_backlight_on(void) {
+    return furi_hal_light_is_backlight_on();
+}
+
+#if defined(BOARD_LCD_IS_ST7567) && BOARD_LCD_IS_ST7567
+bool furi_hal_display_has_contrast(void) {
+    return true;
+}
+
+void furi_hal_display_set_contrast(uint8_t contrast) {
+    if(contrast > 0x3F) contrast = 0x3F;
+    st7567_contrast = contrast;
+    if(st7567_io_handle) {
+        furi_hal_spi_bus_lock();
+        esp_lcd_panel_io_tx_param(st7567_io_handle, 0x81, NULL, 0);
+        esp_lcd_panel_io_tx_param(st7567_io_handle, contrast, NULL, 0);
+        furi_hal_spi_bus_unlock();
+    }
+}
+
+uint8_t furi_hal_display_get_contrast(void) {
+    return st7567_contrast;
+}
+#else
+bool furi_hal_display_has_contrast(void) {
+    return false;
+}
+
+void furi_hal_display_set_contrast(uint8_t contrast) {
+    (void)contrast;
+}
+
+uint8_t furi_hal_display_get_contrast(void) {
+    return 0;
+}
+#endif
+
 void furi_hal_display_sleep(void) {
+#if defined(BOARD_LCD_IS_ST7567) && BOARD_LCD_IS_ST7567
+    if(!st7567_io_handle) return;
+    furi_hal_spi_bus_lock();
+    esp_lcd_panel_io_tx_param(st7567_io_handle, 0xAE /* Display OFF */, NULL, 0);
+    furi_hal_spi_bus_unlock();
+    return;
+#endif
     if(!panel_handle) return;
     furi_hal_spi_bus_lock();
     /* SLPIN: stop the panel's internal oscillator/booster to cut idle current */

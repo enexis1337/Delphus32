@@ -1,47 +1,9 @@
 #include "../subghz_i.h"
 #include "subghz_scene_start.h"
 #include <dolphin/dolphin.h>
+#include <furi_hal_subghz.h>
 
 #include <lib/subghz/protocols/raw.h>
-#include <storage/storage.h>
-#include <loader/loader.h>
-
-// Optionale externe FAPs: Menü-Einträge erscheinen nur, wenn die FAP auf der
-// SD-Karte liegt (SubGhz-Unterordner bevorzugt, sonst /ext/apps).
-static const char* const subghz_wmburst_fap_paths[] = {
-    EXT_PATH("apps/SubGhz/wmbuster.fap"),
-    EXT_PATH("apps/wmbuster.fap"),
-};
-
-static const char* const subghz_protopirate_fap_paths[] = {
-    EXT_PATH("apps/SubGhz/proto_pirate.fap"),
-    EXT_PATH("apps/proto_pirate.fap"),
-};
-
-// Liefert den ersten existierenden Pfad aus der Liste oder NULL.
-static const char* subghz_scene_start_fap_find(const char* const* paths, size_t count) {
-    Storage* storage = furi_record_open(RECORD_STORAGE);
-    const char* found = NULL;
-    for(size_t i = 0; i < count; i++) {
-        if(storage_common_exists(storage, paths[i])) {
-            found = paths[i];
-            break;
-        }
-    }
-    furi_record_close(RECORD_STORAGE);
-    return found;
-}
-
-// Startet eine externe FAP und beendet Sub-GHz. Der Loader ist gelockt, solange
-// Sub-GHz läuft; deshalb den Start aufschieben (loader_enqueue_launch merkt ihn)
-// und die App beenden — sobald sie zu ist, startet der Loader die pending FAP.
-static void subghz_scene_start_launch_fap(SubGhz* subghz, const char* fap_path) {
-    Loader* loader = furi_record_open(RECORD_LOADER);
-    loader_enqueue_launch(loader, fap_path, NULL, LoaderDeferredLaunchFlagGui);
-    furi_record_close(RECORD_LOADER);
-    scene_manager_stop(subghz->scene_manager);
-    view_dispatcher_stop(subghz->view_dispatcher);
-}
 
 void subghz_scene_start_submenu_callback(void* context, uint32_t index) {
     SubGhz* subghz = context;
@@ -55,6 +17,12 @@ void subghz_scene_start_on_enter(void* context) {
     }
 
     submenu_add_item(
+        subghz->submenu,
+        furi_hal_subghz_is_connected() ? "[+] CC1101 Test (OK)" : "[!] CC1101 Test (ERR)",
+        SubmenuIndexCC1101Test,
+        subghz_scene_start_submenu_callback,
+        subghz);
+    submenu_add_item(
         subghz->submenu, "Read", SubmenuIndexRead, subghz_scene_start_submenu_callback, subghz);
     submenu_add_item(
         subghz->submenu,
@@ -62,24 +30,6 @@ void subghz_scene_start_on_enter(void* context) {
         SubmenuIndexReadRAW,
         subghz_scene_start_submenu_callback,
         subghz);
-    if(subghz_scene_start_fap_find(
-           subghz_protopirate_fap_paths, COUNT_OF(subghz_protopirate_fap_paths)) != NULL) {
-        submenu_add_item(
-            subghz->submenu,
-            "ProtoPirate",
-            SubmenuIndexProtoPirate,
-            subghz_scene_start_submenu_callback,
-            subghz);
-    }
-    if(subghz_scene_start_fap_find(
-           subghz_wmburst_fap_paths, COUNT_OF(subghz_wmburst_fap_paths)) != NULL) {
-        submenu_add_item(
-            subghz->submenu,
-            "wM-Burst",
-            SubmenuIndexWmBurst,
-            subghz_scene_start_submenu_callback,
-            subghz);
-    }
     submenu_add_item(
         subghz->submenu,
         "Playlist",
@@ -138,29 +88,22 @@ bool subghz_scene_start_on_event(void* context, SceneManagerEvent event) {
         view_dispatcher_stop(subghz->view_dispatcher);
         return true;
     } else if(event.type == SceneManagerEventTypeCustom) {
-        if(event.event == SubmenuIndexReadRAW) {
+        if(event.event == SubmenuIndexCC1101Test) {
+            char report[256] = {0};
+            bool alive = furi_hal_subghz_check_alive(report, sizeof(report));
+            DialogMessage* message = dialog_message_alloc();
+            dialog_message_set_header(
+                message, alive ? "CC1101: ALIVE" : "CC1101: DEAD", 64, 0, AlignCenter, AlignTop);
+            dialog_message_set_text(message, report, 0, 12, AlignLeft, AlignTop);
+            dialog_message_set_buttons(message, "Back", NULL, NULL);
+            dialog_message_show(subghz->dialogs, message);
+            dialog_message_free(message);
+            return true;
+        } else if(event.event == SubmenuIndexReadRAW) {
             scene_manager_set_scene_state(
                 subghz->scene_manager, SubGhzSceneStart, SubmenuIndexReadRAW);
             subghz_rx_key_state_set(subghz, SubGhzRxKeyStateIDLE);
             scene_manager_next_scene(subghz->scene_manager, SubGhzSceneReadRAW);
-            return true;
-        } else if(event.event == SubmenuIndexProtoPirate) {
-            scene_manager_set_scene_state(
-                subghz->scene_manager, SubGhzSceneStart, SubmenuIndexProtoPirate);
-            const char* fap_path = subghz_scene_start_fap_find(
-                subghz_protopirate_fap_paths, COUNT_OF(subghz_protopirate_fap_paths));
-            if(fap_path != NULL) {
-                subghz_scene_start_launch_fap(subghz, fap_path);
-            }
-            return true;
-        } else if(event.event == SubmenuIndexWmBurst) {
-            scene_manager_set_scene_state(
-                subghz->scene_manager, SubGhzSceneStart, SubmenuIndexWmBurst);
-            const char* fap_path = subghz_scene_start_fap_find(
-                subghz_wmburst_fap_paths, COUNT_OF(subghz_wmburst_fap_paths));
-            if(fap_path != NULL) {
-                subghz_scene_start_launch_fap(subghz, fap_path);
-            }
             return true;
         } else if(event.event == SubmenuIndexRead) {
             subghz_rx_key_state_set(subghz, SubGhzRxKeyStateIDLE);

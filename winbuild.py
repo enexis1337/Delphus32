@@ -31,15 +31,16 @@ import sys
 import time
 from pathlib import Path
 
-DEFAULT_ESP_IDF_DIR = r"C:\Espressif\frameworks\esp-idf-v5.4.1"
-DEFAULT_PORT = "COM14"
+DEFAULT_ESP_IDF_DIR = r"C:\Espressif\frameworks\esp-idf-v5.5.5"
+DEFAULT_PORT = "COM8"
 DEFAULT_DURATION = 8.0
 
 # Mirrors build.sh board mapping.
 BOARDS = {
-    "t_embed":      ("lilygo_t_embed_cc1101", "esp32s3", "build_t_embed"),
-    "esp32s3":      ("esp32s3_generic",       "esp32s3", "build_s3"),
-    "waveshare_c6": ("waveshare_c6_1.9",      "esp32c6", "build_waveshare_c6"),
+    "t_embed":         ("lilygo_t_embed_cc1101", "esp32s3", "build_t_embed"),
+    "esp32s3":         ("esp32s3_generic",       "esp32s3", "build_s3"),
+    "esp32s3_st7567":  ("esp32s3_st7567",        "esp32s3", "build_esp32s3_st7567"),
+    "waveshare_c6":    ("waveshare_c6_1.9",      "esp32c6", "build_waveshare_c6"),
 }
 
 REPO_ROOT = Path(__file__).resolve().parent
@@ -48,9 +49,15 @@ REPO_ROOT = Path(__file__).resolve().parent
 def get_esp_idf_dir() -> Path:
     p = Path(os.environ.get("ESP_IDF_DIR", DEFAULT_ESP_IDF_DIR))
     if not p.exists():
+        # Try finding any esp-idf in C:\Espressif\frameworks
+        fw = Path(r"C:\Espressif\frameworks")
+        if fw.exists():
+            for d in fw.glob("esp-idf*"):
+                if (d / "export.bat").exists():
+                    return d
         sys.exit(
             f"ESP_IDF_DIR '{p}' does not exist. "
-            "Set ESP_IDF_DIR or install ESP-IDF v5.4.x there.")
+            "Set ESP_IDF_DIR or install ESP-IDF there.")
     return p
 
 
@@ -61,6 +68,13 @@ def get_port(arg_port):
 def env_for_idf(extra=None):
     env = os.environ.copy()
     env.pop("MSYSTEM", None)  # Git Bash detection breaks export.bat
+    user_espressif = Path.home() / ".espressif"
+    if "IDF_TOOLS_PATH" not in env and user_espressif.exists():
+        env["IDF_TOOLS_PATH"] = str(user_espressif)
+    py_dir = str(Path(sys.executable).parent)
+    cur_path = env.get("PATH", "")
+    if py_dir not in cur_path:
+        env["PATH"] = f"{py_dir};{cur_path}"
     if extra:
         env.update(extra)
     return env
@@ -69,7 +83,8 @@ def env_for_idf(extra=None):
 def run_with_idf_env(esp_idf_dir: Path, args: str, extra_env=None) -> int:
     # shell=True is required on Windows so cmd.exe parses the && and the quoted path
     # in `call "..."`; passing as a list mangles the quoting.
-    cmd = f'call "{esp_idf_dir}\\export.bat" && idf.py {args}'
+    tools_path = str(Path.home() / ".espressif")
+    cmd = f'set "IDF_TOOLS_PATH={tools_path}" && call "{esp_idf_dir}\\export.bat" && idf.py {args}'
     return subprocess.run(cmd, shell=True, env=env_for_idf(extra_env), cwd=str(REPO_ROOT)).returncode
 
 

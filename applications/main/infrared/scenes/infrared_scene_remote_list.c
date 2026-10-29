@@ -12,7 +12,8 @@ static int32_t infrared_scene_remote_list_task_callback(void* context) {
 static void infrared_scene_remote_list_select_and_load(InfraredApp* infrared) {
     DialogsFileBrowserOptions browser_options;
     dialog_file_browser_set_basic_options(&browser_options, INFRARED_APP_EXTENSION, &I_ir_10px);
-    browser_options.base_path = INFRARED_APP_FOLDER;
+    browser_options.base_path = STORAGE_EXT_PATH_PREFIX;
+    browser_options.skip_assets = false;
 
     const bool file_selected = dialog_file_browser_show(
         infrared->dialogs, infrared->file_path, infrared->file_path, &browser_options);

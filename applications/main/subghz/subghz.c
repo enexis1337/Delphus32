@@ -4,7 +4,6 @@
 #include <subghz/types.h>
 #include <lib/toolbox/path.h>
 #include <float_tools.h>
-#include <esp_heap_caps.h>
 #include "subghz_i.h"
 
 #define TAG "SubGhzApp"
@@ -92,6 +91,7 @@ static void subghz_load_custom_presets(SubGhzSetting* setting) {
 */
 
 SubGhz* subghz_alloc(bool alloc_for_tx_only) {
+    FURI_LOG_I(TAG, "subghz_alloc: starting...");
     SubGhz* subghz = malloc(sizeof(SubGhz));
 
     subghz->file_path = furi_string_alloc();
@@ -299,6 +299,7 @@ SubGhz* subghz_alloc(bool alloc_for_tx_only) {
     //Init Error_str
     subghz->error_str = furi_string_alloc();
 
+    FURI_LOG_I(TAG, "subghz_alloc: successfully finished");
     return subghz;
 }
 
@@ -427,6 +428,7 @@ void subghz_free(SubGhz* subghz, bool alloc_for_tx_only) {
 }
 
 int32_t subghz_app(void* p) {
+    FURI_LOG_I(TAG, "Entering subghz_app (arg=%s)...", p ? (const char*)p : "none");
     bool alloc_for_tx;
     if(p && strlen(p)) {
         alloc_for_tx = true;
@@ -434,19 +436,8 @@ int32_t subghz_app(void* p) {
         alloc_for_tx = false;
     }
 
-    FURI_LOG_D(
-        TAG,
-        "heap before alloc: internal=%zu spiram=%zu",
-        heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
-        heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
-
     SubGhz* subghz = subghz_alloc(alloc_for_tx);
-
-    FURI_LOG_D(
-        TAG,
-        "heap after alloc:  internal=%zu spiram=%zu",
-        heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
-        heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
+    FURI_LOG_I(TAG, "subghz_alloc completed: %p", subghz);
 
     if(alloc_for_tx) {
         subghz->raw_send_only = true;
@@ -497,7 +488,9 @@ int32_t subghz_app(void* p) {
 
     furi_hal_power_suppress_charge_enter();
 
+    FURI_LOG_I(TAG, "Calling view_dispatcher_run");
     view_dispatcher_run(subghz->view_dispatcher);
+    FURI_LOG_I(TAG, "view_dispatcher_run returned, freeing subghz");
 
     furi_hal_power_suppress_charge_exit();
 

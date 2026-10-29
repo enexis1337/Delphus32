@@ -5,6 +5,7 @@
 #include <string.h>
 
 #include <driver/rmt_tx.h>
+#include <driver/gpio.h>
 #include <esp_attr.h>
 #include <esp_log.h>
 #include <esp_timer.h>
@@ -51,7 +52,6 @@ typedef struct {
     bool sequence_complete;
     volatile bool stop_requested;
     rmt_channel_handle_t channel;
-    bool channel_enabled;
     rmt_encoder_handle_t encoder;
 } FuriHalSubGhzAsyncTx;
 
@@ -116,7 +116,7 @@ static FuriHalSubGhzContext furi_hal_subghz = {
 
 static volatile uint32_t furi_hal_subghz_rx_irq_count = 0;
 
-static void furi_hal_subghz_capture_gpio_callback(void* context) {
+static void IRAM_ATTR furi_hal_subghz_capture_gpio_callback(void* context) {
     UNUSED(context);
     furi_hal_subghz_rx_irq_count++;
 
@@ -352,18 +352,15 @@ static esp_err_t furi_hal_subghz_async_tx_alloc_backend(FuriHalSubGhzAsyncTx* as
         return error;
     }
 
-    error = rmt_enable(async_tx->channel);
-    async_tx->channel_enabled = (error == ESP_OK);
-    return error;
+    return rmt_enable(async_tx->channel);
 }
 
 static void furi_hal_subghz_async_tx_free_backend(FuriHalSubGhzAsyncTx* async_tx) {
-    if(async_tx->channel && async_tx->channel_enabled) {
+    if(async_tx->channel) {
         esp_err_t error = rmt_disable(async_tx->channel);
-        if(error != ESP_OK) {
+        if(error != ESP_OK && error != ESP_ERR_INVALID_STATE) {
             ESP_LOGW(TAG, "Failed to disable RMT TX channel: %s", esp_err_to_name(error));
         }
-        async_tx->channel_enabled = false;
     }
 
     if(async_tx->encoder) {
@@ -383,28 +380,51 @@ static void furi_hal_subghz_async_tx_free_backend(FuriHalSubGhzAsyncTx* async_tx
     }
 }
 
+static CC1101Status furi_hal_subghz_manual_reset(const FuriHalSpiBusHandle* handle) {
+    if(handle->cs && handle->cs->pin != UINT16_MAX) {
+        /* CC1101 Datasheet Section 19.1.2 Manual Reset:
+         * 1. Hold CSn high for at least 40 us */
+        furi_hal_gpio_write(handle->cs, true);
+        esp_rom_delay_us(50);
+        /* 2. Strobe CSn low / high */
+        furi_hal_gpio_write(handle->cs, false);
+        esp_rom_delay_us(30);
+        /* 3. Hold CSn high for at least 40 us */
+        furi_hal_gpio_write(handle->cs, true);
+        esp_rom_delay_us(50);
+    }
+
+    /* 4. Issue SRES strobe (pulls CSn low, waits for MISO low, sends SRES, pulls CSn high) */
+    CC1101Status status = cc1101_reset(handle);
+
+    /* 5. Allow crystal oscillator to stabilize and chip to re-enter IDLE */
+    esp_rom_delay_us(500);
+
+    return status;
+}
+
 static bool furi_hal_subghz_probe_read(FuriHalSubGhzProbe* probe, bool reset_radio) {
     furi_check(probe);
     memset(probe, 0, sizeof(*probe));
 
     furi_hal_spi_acquire(&furi_hal_spi_bus_handle_subghz);
     if(reset_radio) {
-        probe->reset_status = cc1101_reset(&furi_hal_spi_bus_handle_subghz);
+        probe->reset_status = furi_hal_subghz_manual_reset(&furi_hal_spi_bus_handle_subghz);
     }
     probe->status = cc1101_get_status(&furi_hal_spi_bus_handle_subghz);
     probe->partnumber = cc1101_get_partnumber(&furi_hal_spi_bus_handle_subghz);
     probe->version = cc1101_get_version(&furi_hal_spi_bus_handle_subghz);
     furi_hal_spi_release(&furi_hal_spi_bus_handle_subghz);
 
-    return (probe->partnumber != 0x00 && probe->partnumber != 0xFF) ||
-           (probe->version != 0x00 && probe->version != 0xFF);
+    /* CC1101 PARTNUM is 0x00, VERSION is typically 0x04 or 0x14 */
+    return (probe->version != 0x00 && probe->version != 0xFF);
 }
 
 static void furi_hal_subghz_log_probe(const FuriHalSubGhzProbe* probe, bool connected) {
     furi_check(probe);
 
     if(connected) {
-        ESP_LOGD(
+        ESP_LOGI(
             TAG,
             "CC1101 probe OK: part=0x%02X version=0x%02X status=0x%02X reset_status=0x%02X",
             probe->partnumber,
@@ -461,6 +481,189 @@ const GpioPin* furi_hal_subghz_get_data_gpio(void) {
     return &gpio_cc1101_g0;
 }
 
+bool furi_hal_subghz_is_connected(void) {
+    return furi_hal_subghz.connected;
+}
+
+static uint8_t subghz_probe_bitbang(int cs, int sck, int mosi, int miso, bool cs_active_high) {
+    if(cs == UINT16_MAX || sck == UINT16_MAX || mosi == UINT16_MAX || miso == UINT16_MAX) {
+        return 0xFF;
+    }
+    gpio_set_direction((gpio_num_t)cs, GPIO_MODE_OUTPUT);
+    gpio_set_level((gpio_num_t)cs, cs_active_high ? 0 : 1);
+    gpio_set_direction((gpio_num_t)sck, GPIO_MODE_OUTPUT);
+    gpio_set_direction((gpio_num_t)mosi, GPIO_MODE_OUTPUT);
+    gpio_set_direction((gpio_num_t)miso, GPIO_MODE_INPUT);
+    gpio_set_pull_mode((gpio_num_t)miso, GPIO_PULLUP_ONLY);
+    gpio_set_level((gpio_num_t)sck, 0);
+    gpio_set_level((gpio_num_t)mosi, 0);
+    esp_rom_delay_us(50);
+
+    // Strobe CS to reset SPI interface
+    gpio_set_level((gpio_num_t)cs, cs_active_high ? 1 : 0);
+    esp_rom_delay_us(30);
+    gpio_set_level((gpio_num_t)cs, cs_active_high ? 0 : 1);
+    esp_rom_delay_us(50);
+
+    // Strobe SRES (0x30)
+    gpio_set_level((gpio_num_t)cs, cs_active_high ? 1 : 0);
+    esp_rom_delay_us(30);
+    uint8_t cmd = 0x30;
+    for(int b = 0; b < 8; b++) {
+        gpio_set_level((gpio_num_t)mosi, (cmd & 0x80) ? 1 : 0);
+        cmd <<= 1;
+        esp_rom_delay_us(2);
+        gpio_set_level((gpio_num_t)sck, 1);
+        esp_rom_delay_us(2);
+        gpio_set_level((gpio_num_t)sck, 0);
+        esp_rom_delay_us(2);
+    }
+    gpio_set_level((gpio_num_t)cs, cs_active_high ? 0 : 1);
+    esp_rom_delay_us(1000); // 1ms for crystal stabilization and reset
+
+    // Read VERSION register (0x31 | 0x80 | 0x40 = 0xF1)
+    gpio_set_level((gpio_num_t)cs, cs_active_high ? 1 : 0);
+    esp_rom_delay_us(30);
+    uint8_t tx = 0xF1;
+    for(int b = 0; b < 8; b++) {
+        gpio_set_level((gpio_num_t)mosi, (tx & 0x80) ? 1 : 0);
+        tx <<= 1;
+        esp_rom_delay_us(2);
+        gpio_set_level((gpio_num_t)sck, 1);
+        esp_rom_delay_us(2);
+        gpio_set_level((gpio_num_t)sck, 0);
+        esp_rom_delay_us(2);
+    }
+    uint8_t ver = 0;
+    for(int b = 0; b < 8; b++) {
+        gpio_set_level((gpio_num_t)mosi, 0);
+        esp_rom_delay_us(2);
+        gpio_set_level((gpio_num_t)sck, 1);
+        esp_rom_delay_us(2);
+        ver = (ver << 1) | (gpio_get_level((gpio_num_t)miso) ? 1 : 0);
+        gpio_set_level((gpio_num_t)sck, 0);
+        esp_rom_delay_us(2);
+    }
+    gpio_set_level((gpio_num_t)cs, cs_active_high ? 0 : 1);
+
+    return ver;
+}
+
+bool furi_hal_subghz_check_alive(char* report, size_t report_size) {
+    /* 1. Raw pin level inspection before driving */
+    int miso_idle = furi_hal_gpio_read(&gpio_ext_pa6);
+    int gdo0_idle = (gpio_cc1101_g0.pin != UINT16_MAX) ? furi_hal_gpio_read(&gpio_cc1101_g0) : -1;
+
+    /* When CS goes LOW, CC1101 SO (MISO) should go LOW (CHIP_RDYn) */
+    furi_hal_gpio_write(&gpio_ext_pa4, false); // CS=12 LOW
+    esp_rom_delay_us(100);
+    int miso_cs0 = furi_hal_gpio_read(&gpio_ext_pa6);
+    furi_hal_gpio_write(&gpio_ext_pa4, true); // CS=12 HIGH
+    esp_rom_delay_us(50);
+
+    /* 2. Standard Hardware SPI read */
+    furi_hal_spi_acquire(&furi_hal_spi_bus_handle_subghz);
+
+    CC1101Status rst_st = furi_hal_subghz_manual_reset(&furi_hal_spi_bus_handle_subghz);
+    (void)rst_st;
+
+    uint8_t partnum = cc1101_get_partnumber(&furi_hal_spi_bus_handle_subghz);
+    uint8_t version = cc1101_get_version(&furi_hal_spi_bus_handle_subghz);
+    CC1101Status status = cc1101_get_status(&furi_hal_spi_bus_handle_subghz);
+
+    uint8_t orig_pktlen = 0xFF;
+    uint8_t val_55 = 0;
+    uint8_t val_aa = 0;
+    cc1101_read_reg(&furi_hal_spi_bus_handle_subghz, CC1101_PKTLEN, &orig_pktlen);
+    cc1101_write_reg(&furi_hal_spi_bus_handle_subghz, CC1101_PKTLEN, 0x55);
+    cc1101_read_reg(&furi_hal_spi_bus_handle_subghz, CC1101_PKTLEN, &val_55);
+    cc1101_write_reg(&furi_hal_spi_bus_handle_subghz, CC1101_PKTLEN, 0xAA);
+    cc1101_read_reg(&furi_hal_spi_bus_handle_subghz, CC1101_PKTLEN, &val_aa);
+    cc1101_write_reg(&furi_hal_spi_bus_handle_subghz, CC1101_PKTLEN, orig_pktlen);
+
+    furi_hal_spi_release(&furi_hal_spi_bus_handle_subghz);
+
+    bool spi_rw_ok = (val_55 == 0x55 && val_aa == 0xAA);
+    bool chip_id_ok = (version != 0x00 && version != 0xFF);
+    bool alive = spi_rw_ok && chip_id_ok;
+    const char* working_mode = NULL;
+
+    /* 3. Alternate probe modes if standard HW SPI failed */
+    uint8_t bb_std = 0xFF, bb_swp = 0xFF, bb_cs4 = 0xFF;
+    if(!alive) {
+        bb_std = subghz_probe_bitbang(
+            BOARD_PIN_CC1101_CSN, BOARD_PIN_CC1101_SCK,
+            BOARD_PIN_CC1101_MOSI, BOARD_PIN_CC1101_MISO, false);
+        if(bb_std != 0x00 && bb_std != 0xFF) {
+            alive = true;
+            version = bb_std;
+            working_mode = "Bitbang OK (SPI2 DMA issue)";
+        }
+    }
+    if(!alive) {
+        /* Test swapped MOSI / MISO */
+        bb_swp = subghz_probe_bitbang(
+            BOARD_PIN_CC1101_CSN, BOARD_PIN_CC1101_SCK,
+            BOARD_PIN_CC1101_MISO, BOARD_PIN_CC1101_MOSI, false);
+        if(bb_swp != 0x00 && bb_swp != 0xFF) {
+            alive = true;
+            version = bb_swp;
+            working_mode = "Swapped SI/SO detected!";
+        }
+    }
+    if(!alive && gpio_lcd_cs.pin != UINT16_MAX) {
+        /* Test CS on LCD_CS (IO4) */
+        bb_cs4 = subghz_probe_bitbang(
+            gpio_lcd_cs.pin, BOARD_PIN_CC1101_SCK,
+            BOARD_PIN_CC1101_MOSI, BOARD_PIN_CC1101_MISO, false);
+        if(bb_cs4 != 0x00 && bb_cs4 != 0xFF) {
+            alive = true;
+            version = bb_cs4;
+            working_mode = "CS on IO4 detected!";
+        }
+    }
+
+    furi_hal_subghz.connected = alive;
+
+    ESP_LOGI(TAG, "========== CC1101 HEALTH CHECK ==========");
+    ESP_LOGI(TAG, "Alive: %s | Status: 0x%02X | Mode: %s",
+        alive ? "YES" : "NO", status.raw, working_mode ? working_mode : "Standard");
+    ESP_LOGI(TAG, "Pins: MISO idle=%d cs0=%d | GDO0=%d", miso_idle, miso_cs0, gdo0_idle);
+    ESP_LOGI(TAG, "Probes: HW=0x%02X BB_std=0x%02X BB_swp=0x%02X BB_cs4=0x%02X",
+        version, bb_std, bb_swp, bb_cs4);
+    ESP_LOGI(TAG, "=========================================");
+
+    if(report && report_size > 0) {
+        if(alive) {
+            snprintf(report, report_size,
+                "CC1101: FOUND!\n"
+                "Mode: %s\n"
+                "Version: 0x%02X\n"
+                "GDO0(IO%d): %s\n"
+                "RESULT: MODULE ALIVE!",
+                working_mode ? working_mode : "Standard SPI",
+                version,
+                gpio_cc1101_g0.pin,
+                (gdo0_idle >= 0) ? "OK" : "N/A");
+        } else {
+            snprintf(report, report_size,
+                "CC1101: NO RESPONSE\n"
+                "MISO: idle=%d cs0=%d\n"
+                "GDO0(IO%d)=%d CS12=%d\n"
+                "Probes: std=%02X swp=%02X\n"
+                "Check wiring:\n"
+                "1. 3.3V/GND power\n"
+                "2. SI->IO9, SO->IO10\n"
+                "3. CSN->IO12",
+                miso_idle, miso_cs0,
+                gpio_cc1101_g0.pin, gdo0_idle, 1,
+                bb_std, bb_swp);
+        }
+    }
+
+    return alive;
+}
+
 void furi_hal_subghz_init(void) {
     /* Note: BOARD_PIN_PWR_EN is set in furi_hal_init_early() */
 
@@ -476,10 +679,10 @@ void furi_hal_subghz_init(void) {
     furi_hal_gpio_write(&sw0_init, true);
 #endif
 
-    FuriHalSubGhzProbe probe = {0};
+    esp_rom_delay_us(10000);
+
     furi_hal_spi_bus_handle_init(&furi_hal_spi_bus_handle_subghz);
-    furi_hal_subghz.connected = furi_hal_subghz_probe_read(&probe, true);
-    furi_hal_subghz_log_probe(&probe, furi_hal_subghz.connected);
+    furi_hal_subghz_check_alive(NULL, 0);
     furi_hal_subghz.state = FuriHalSubGhzStateIdle;
 }
 
@@ -595,7 +798,7 @@ void furi_hal_subghz_shutdown(void) {
 void furi_hal_subghz_reset(void) {
     furi_hal_spi_acquire(&furi_hal_spi_bus_handle_subghz);
     cc1101_switch_to_idle(&furi_hal_spi_bus_handle_subghz);
-    cc1101_reset(&furi_hal_spi_bus_handle_subghz);
+    furi_hal_subghz_manual_reset(&furi_hal_spi_bus_handle_subghz);
     cc1101_write_reg(&furi_hal_spi_bus_handle_subghz, CC1101_IOCFG0, CC1101IocfgHighImpedance);
     furi_hal_spi_release(&furi_hal_spi_bus_handle_subghz);
     FuriHalSubGhzProbe probe = {0};
@@ -612,9 +815,14 @@ void furi_hal_subghz_idle(void) {
 
 void furi_hal_subghz_rx(void) {
     furi_hal_spi_acquire(&furi_hal_spi_bus_handle_subghz);
+    cc1101_switch_to_idle(&furi_hal_spi_bus_handle_subghz);
+    cc1101_flush_rx(&furi_hal_spi_bus_handle_subghz);
     cc1101_switch_to_rx(&furi_hal_spi_bus_handle_subghz);
-    cc1101_wait_status_state(&furi_hal_spi_bus_handle_subghz, CC1101StateRX, 10000);
+    bool ok = cc1101_wait_status_state(&furi_hal_spi_bus_handle_subghz, CC1101StateRX, 10000);
     furi_hal_spi_release(&furi_hal_spi_bus_handle_subghz);
+    if(!ok) {
+        ESP_LOGE(TAG, "furi_hal_subghz_rx: failed to enter RX state!");
+    }
 }
 
 bool furi_hal_subghz_tx(void) {
@@ -629,6 +837,13 @@ bool furi_hal_subghz_tx(void) {
 
 float furi_hal_subghz_get_rssi(void) {
     furi_hal_spi_acquire(&furi_hal_spi_bus_handle_subghz);
+    CC1101Status status = cc1101_get_status(&furi_hal_spi_bus_handle_subghz);
+    if(furi_hal_subghz.state == FuriHalSubGhzStateAsyncRx &&
+       cc1101_status_state(status) == CC1101StateRXFIFO_OVERFLOW) {
+        cc1101_switch_to_idle(&furi_hal_spi_bus_handle_subghz);
+        cc1101_flush_rx(&furi_hal_spi_bus_handle_subghz);
+        cc1101_switch_to_rx(&furi_hal_spi_bus_handle_subghz);
+    }
     int32_t rssi_dec = cc1101_get_rssi(&furi_hal_spi_bus_handle_subghz);
     furi_hal_spi_release(&furi_hal_spi_bus_handle_subghz);
 
@@ -695,7 +910,18 @@ uint32_t furi_hal_subghz_set_frequency(uint32_t value) {
     cc1101_wait_status_state(&furi_hal_spi_bus_handle_subghz, CC1101StateIDLE, 10000);
     furi_hal_spi_release(&furi_hal_spi_bus_handle_subghz);
 
-    ESP_LOGD(TAG, "set_frequency: requested=%lu real=%lu", (unsigned long)value, (unsigned long)real_frequency);
+    /* Automatically set RF antenna path according to frequency band */
+    if(real_frequency >= 281000000 && real_frequency <= 361000000) {
+        furi_hal_subghz_set_path(FuriHalSubGhzPath315);
+    } else if(real_frequency >= 378000000 && real_frequency <= 481000000) {
+        furi_hal_subghz_set_path(FuriHalSubGhzPath433);
+    } else if(real_frequency >= 749000000 && real_frequency <= 962000000) {
+        furi_hal_subghz_set_path(FuriHalSubGhzPath868);
+    } else {
+        furi_hal_subghz_set_path(FuriHalSubGhzPath433);
+    }
+
+    ESP_LOGI(TAG, "set_frequency: requested=%lu real=%lu", (unsigned long)value, (unsigned long)real_frequency);
     furi_hal_subghz.frequency = real_frequency;
     return real_frequency;
 }
@@ -742,7 +968,7 @@ void furi_hal_subghz_set_path(FuriHalSubGhzPath path) {
 void furi_hal_subghz_start_async_rx(FuriHalSubGhzCaptureCallback callback, void* context) {
     furi_check(callback);
 
-    ESP_LOGD(TAG, "start_async_rx: GDO0=GPIO%d freq=%lu connected=%d",
+    ESP_LOGI(TAG, "start_async_rx: GDO0=GPIO%d freq=%lu connected=%d",
         gpio_cc1101_g0.pin, (unsigned long)furi_hal_subghz.frequency, furi_hal_subghz.connected);
 
     furi_hal_subghz.async_rx_callback = callback;
@@ -760,7 +986,7 @@ void furi_hal_subghz_start_async_rx(FuriHalSubGhzCaptureCallback callback, void*
     furi_hal_spi_acquire(&furi_hal_spi_bus_handle_subghz);
     CC1101Status status = cc1101_get_status(&furi_hal_spi_bus_handle_subghz);
     furi_hal_spi_release(&furi_hal_spi_bus_handle_subghz);
-    ESP_LOGD(TAG, "start_async_rx: CC1101 status=0x%02X state=%d gdo0_level=%d irq_count=%lu",
+    ESP_LOGI(TAG, "start_async_rx: CC1101 status=0x%02X state=%d gdo0_level=%d irq_count=%lu",
         status.raw, cc1101_status_state(status),
         furi_hal_gpio_read(&gpio_cc1101_g0),
         (unsigned long)furi_hal_subghz_rx_irq_count);
@@ -865,9 +1091,13 @@ void furi_hal_subghz_stop_async_tx(void) {
     FuriHalSubGhzAsyncTx* async_tx = &furi_hal_subghz.async_tx;
     async_tx->stop_requested = true;
 
-    /* free_backend() disables the channel, which also aborts a transmission
-       still in flight — no separate abort call (it would fail with
-       INVALID_STATE and make the RMT driver log an error). */
+    if(async_tx->channel && !furi_hal_subghz.async_tx_complete) {
+        esp_err_t error = rmt_disable(async_tx->channel);
+        if(error != ESP_OK && error != ESP_ERR_INVALID_STATE) {
+            ESP_LOGW(TAG, "Failed to abort RMT transmission: %s", esp_err_to_name(error));
+        }
+    }
+
     furi_hal_subghz_async_tx_free_backend(async_tx);
 
     furi_hal_gpio_init(&gpio_cc1101_g0, GpioModeInput, GpioPullNo, GpioSpeedLow);

@@ -3,7 +3,6 @@
 #include "furi_hal_usb_hid_backend.h"
 
 #include <furi.h>
-#include <furi_hal_version.h>
 #include <string.h>
 #include <stdio.h>
 
@@ -184,9 +183,7 @@ bool furi_hal_usb_hid_backend_start(const FuriHalUsbHidConfig* cfg) {
     }
 
     const char* manuf = (cfg && cfg->manuf[0]) ? cfg->manuf : "Flipper Devices Inc.";
-    const char* product =
-        (cfg && cfg->product[0]) ? cfg->product : furi_hal_version_get_name_ptr();
-    if(!product || !product[0]) product = "Flipper Zero";
+    const char* product = (cfg && cfg->product[0]) ? cfg->product : "Flipper Zero";
     uint16_t vid = (cfg && cfg->vid) ? (uint16_t)cfg->vid : HID_VID_DEFAULT;
     uint16_t pid = (cfg && cfg->pid) ? (uint16_t)cfg->pid : HID_PID_DEFAULT;
 

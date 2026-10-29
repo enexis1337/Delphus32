@@ -1,0 +1,1 @@
+Command: cmake -G Ninja -DPYTHON_DEPS_CHECKED=1 -DPYTHON=C:\Users\dfili\.espressif\python_env\idf5.5_py3.11_env\Scripts\python.exe -DESP_PLATFORM=1 -DFLIPPER_BOARD=esp32s3_st7567 -DIDF_TARGET=esp32s3 -DCCACHE_ENABLE=1 C:\Users\dfili\Downloads\Flipper-Zero-ESP32-Port-1.1.5

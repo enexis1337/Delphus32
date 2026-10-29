@@ -1,6 +1,7 @@
 #include "infrared_brute_force.h"
 
 #include <stdlib.h>
+#include <string.h>
 #include <m-dict.h>
 #include <m-array.h>
 #include <flipper_format/flipper_format.h>
@@ -98,12 +99,68 @@ InfraredErrorCode infrared_brute_force_calculate_messages(InfraredBruteForce* br
     FuriString* signal_name = furi_string_alloc();
     InfraredSignal* signal = infrared_signal_alloc();
 
-    do {
-        if(!flipper_format_buffered_file_open_existing(ff, brute_force->db_filename)) {
-            error = InfraredErrorCodeFileOperationFailed;
-            break;
+    const char* db_path = brute_force->db_filename;
+    bool file_opened = false;
+
+    FURI_LOG_I("IR_BF", "Trying to open database: %s", db_path);
+
+    /* First attempt: original path */
+    if(flipper_format_buffered_file_open_existing(ff, db_path)) {
+        file_opened = true;
+        FURI_LOG_I("IR_BF", "Opened database: %s", db_path);
+    } else {
+        FURI_LOG_W("IR_BF", "Failed to open database: %s", db_path);
+
+        /* Fallback: /ext/infrared/assets/X.ir -> /ext/infrared/X.ir */
+        const char* assets_marker = strstr(db_path, "/assets/");
+        if(assets_marker) {
+            size_t prefix_len = (size_t)(assets_marker - db_path);
+            const char* filename = assets_marker + 8;
+            FuriString* fallback = furi_string_alloc();
+            furi_string_set_strn(fallback, db_path, prefix_len);
+            furi_string_cat_printf(fallback, "/%s", filename);
+            const char* fallback_cstr = furi_string_get_cstr(fallback);
+
+            FURI_LOG_I("IR_BF", "Trying fallback path: %s", fallback_cstr);
+            flipper_format_free(ff);
+            ff = flipper_format_buffered_file_alloc(storage);
+
+            if(flipper_format_buffered_file_open_existing(ff, fallback_cstr)) {
+                file_opened = true;
+                FURI_LOG_I("IR_BF", "Opened fallback database: %s", fallback_cstr);
+            }
+            furi_string_free(fallback);
         }
 
+        /* Reverse fallback: /ext/infrared/X.ir -> /ext/infrared/assets/X.ir */
+        if(!file_opened && !assets_marker) {
+            const char* last_slash = strrchr(db_path, '/');
+            if(last_slash) {
+                size_t dir_len = (size_t)(last_slash - db_path);
+                const char* filename = last_slash + 1;
+                FuriString* fallback = furi_string_alloc();
+                furi_string_set_strn(fallback, db_path, dir_len);
+                furi_string_cat_printf(fallback, "/assets/%s", filename);
+                const char* fallback_cstr = furi_string_get_cstr(fallback);
+
+                FURI_LOG_I("IR_BF", "Trying assets fallback: %s", fallback_cstr);
+                flipper_format_free(ff);
+                ff = flipper_format_buffered_file_alloc(storage);
+
+                if(flipper_format_buffered_file_open_existing(ff, fallback_cstr)) {
+                    file_opened = true;
+                }
+                furi_string_free(fallback);
+            }
+        }
+    }
+
+    if(!file_opened) {
+        FURI_LOG_E("IR_BF", "All database paths failed for: %s", brute_force->db_filename);
+        error = InfraredErrorCodeFileOperationFailed;
+    }
+
+    if(error == InfraredErrorCodeNone) {
         bool signal_valid = false;
         while(infrared_signal_read_name(ff, signal_name) == InfraredErrorCodeNone) {
             size_t signal_start = flipper_format_tell(ff);
@@ -116,12 +173,10 @@ InfraredErrorCode infrared_brute_force_calculate_messages(InfraredBruteForce* br
             furi_assert(record);
             SignalPositionArray_push_back(record->signals, signal_start);
         }
-        if(!signal_valid) break;
-    } while(false);
+    }
 
     infrared_signal_free(signal);
     furi_string_free(signal_name);
-
     flipper_format_free(ff);
     furi_record_close(RECORD_STORAGE);
     return error;

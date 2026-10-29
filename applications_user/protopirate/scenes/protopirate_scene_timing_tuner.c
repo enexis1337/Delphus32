@@ -1,41 +1,11 @@
 // scenes/protopirate_scene_timing_tuner.c
 #include "../protopirate_app_i.h"
 #ifdef ENABLE_TIMING_TUNER_SCENE
-
-#ifndef PROTOPIRATE_TIMING_TUNER_PLUGIN_BUILD
-
-void protopirate_scene_timing_tuner_on_enter(void* context) {
-    protopirate_tool_scene_on_enter(context, ProtoPirateToolScenePluginKindTimingTuner);
-}
-
-bool protopirate_scene_timing_tuner_on_event(void* context, SceneManagerEvent event) {
-    return protopirate_tool_scene_on_event(context, event);
-}
-
-void protopirate_scene_timing_tuner_on_exit(void* context) {
-    protopirate_tool_scene_on_exit(context);
-}
-
-#else
-
-#include "../protopirate_history.h"
-#include "../protocols/protocol_timings.h"
+#include "../protocols/protocol_items.h"
 #include <gui/elements.h>
 #include <math.h>
 
 #define TAG "ProtoPirateTimingTuner"
-
-static const ProtoPirateToolSceneHostApi* g_tool_scene_host_api = NULL;
-
-#define protopirate_ensure_view_about(app) g_tool_scene_host_api->ensure_view_about(app)
-#define protopirate_radio_init(app)        g_tool_scene_host_api->radio_init(app)
-#define protopirate_rx_stack_resume_after_tx(app) \
-    g_tool_scene_host_api->rx_stack_resume_after_tx(app)
-#define protopirate_begin(app, preset_data) g_tool_scene_host_api->begin(app, preset_data)
-#define protopirate_rx(app, frequency)      g_tool_scene_host_api->rx(app, frequency)
-#define protopirate_rx_end(app)             g_tool_scene_host_api->rx_end(app)
-#define protopirate_history_release_scratch(history) \
-    g_tool_scene_host_api->history_release_scratch(history)
 
 #define MAX_TIMING_SAMPLES       512
 #define VISIBLE_LINES            6
@@ -78,13 +48,6 @@ typedef struct {
 } TimingTunerContext;
 
 static TimingTunerContext* g_timing_ctx = NULL;
-
-static void timing_tuner_context_free(void) {
-    if(g_timing_ctx) {
-        free(g_timing_ctx);
-        g_timing_ctx = NULL;
-    }
-}
 
 static void calculate_timing_stats(TimingTunerContext* ctx) {
     size_t num_samples = ctx->buffer_wrapped ? MAX_TIMING_SAMPLES : ctx->write_idx;
@@ -649,36 +612,11 @@ void protopirate_scene_timing_tuner_on_enter(void* context) {
 
     FURI_LOG_I(TAG, "Entering Timing Tuner");
 
-    if(!protopirate_ensure_view_about(app)) {
-        notification_message(app->notifications, &sequence_error);
-        app->tool_scene_nav_pending = TOOL_SCENE_NAV_POP;
-        return;
-    }
-
-    if(!app->radio_initialized && !protopirate_radio_init(app)) {
-        FURI_LOG_E(TAG, "Failed to initialize radio for timing tuner");
-        notification_message(app->notifications, &sequence_error);
-        app->tool_scene_nav_pending = TOOL_SCENE_NAV_POP;
-        return;
-    }
-
-    if(app->txrx && app->txrx->history) {
-        protopirate_history_release_scratch(app->txrx->history);
-    }
-
-    protopirate_rx_stack_resume_after_tx(app);
-    if(!app->txrx->receiver) {
-        FURI_LOG_E(TAG, "Failed to allocate receiver for timing tuner");
-        notification_message(app->notifications, &sequence_error);
-        app->tool_scene_nav_pending = TOOL_SCENE_NAV_POP;
-        return;
-    }
-
     g_timing_ctx = malloc(sizeof(TimingTunerContext));
     if(!g_timing_ctx) {
         FURI_LOG_E(TAG, "Failed to allocate timing tuner context");
         notification_message(app->notifications, &sequence_error);
-        app->tool_scene_nav_pending = TOOL_SCENE_NAV_POP;
+        scene_manager_previous_scene(app->scene_manager);
         return;
     }
     memset(g_timing_ctx, 0, sizeof(TimingTunerContext));
@@ -702,11 +640,6 @@ void protopirate_scene_timing_tuner_on_enter(void* context) {
         app->txrx->worker = subghz_worker_alloc();
         if(!app->txrx->worker) {
             FURI_LOG_E(TAG, "Failed to allocate worker!");
-            view_set_draw_callback(app->view_about, NULL);
-            view_set_input_callback(app->view_about, NULL);
-            timing_tuner_context_free();
-            notification_message(app->notifications, &sequence_error);
-            app->tool_scene_nav_pending = TOOL_SCENE_NAV_POP;
             return;
         }
         // Set up worker callbacks
@@ -735,15 +668,14 @@ bool protopirate_scene_timing_tuner_on_event(void* context, SceneManagerEvent ev
 
     if(event.type == SceneManagerEventTypeCustom) {
         if(event.event == 0) {
-            app->tool_scene_nav_pending = TOOL_SCENE_NAV_POP;
+            scene_manager_previous_scene(app->scene_manager);
             consumed = true;
         } else if(event.event == 1) {
             if(g_timing_ctx && g_timing_ctx->is_receiving) {
                 protopirate_rx_end(app);
                 g_timing_ctx->is_receiving = false;
             }
-            app->tool_scene_nav_pending = TOOL_SCENE_NAV_NEXT;
-            app->tool_scene_nav_target = ProtoPirateSceneReceiverConfig;
+            scene_manager_next_scene(app->scene_manager, ProtoPirateSceneReceiverConfig);
             consumed = true;
         }
     } else if(event.type == SceneManagerEventTypeTick) {
@@ -770,16 +702,10 @@ void protopirate_scene_timing_tuner_on_exit(void* context) {
         protopirate_rx_end(app);
     }
 
-    if(app->txrx && app->txrx->receiver) {
-        subghz_receiver_set_rx_callback(app->txrx->receiver, NULL, NULL);
-    }
+    subghz_worker_set_pair_callback(
+        app->txrx->worker, (SubGhzWorkerPairCallback)subghz_receiver_decode);
 
-    if(app->txrx && app->txrx->worker) {
-        subghz_worker_set_pair_callback(
-            app->txrx->worker, (SubGhzWorkerPairCallback)subghz_receiver_decode);
-    }
-
-    if(app->txrx && app->txrx->worker) {
+    if(app->txrx->worker) {
         FURI_LOG_D(TAG, "Freeing worker %p", app->txrx->worker);
         subghz_worker_free(app->txrx->worker);
         app->txrx->worker = NULL;
@@ -787,38 +713,12 @@ void protopirate_scene_timing_tuner_on_exit(void* context) {
         FURI_LOG_D(TAG, "Worker was NULL, skipping free");
     }
 
-    if(app->view_about) {
-        view_set_draw_callback(app->view_about, NULL);
-        view_set_input_callback(app->view_about, NULL);
-        view_set_context(app->view_about, NULL);
+    view_set_draw_callback(app->view_about, NULL);
+    view_set_input_callback(app->view_about, NULL);
+
+    if(g_timing_ctx) {
+        free(g_timing_ctx);
+        g_timing_ctx = NULL;
     }
-
-    timing_tuner_context_free();
 }
-
-static void timing_tuner_plugin_set_host_api(const ProtoPirateToolSceneHostApi* host_api) {
-    g_tool_scene_host_api = host_api;
-}
-
-static const ProtoPirateToolScenePlugin protopirate_timing_tuner_plugin = {
-    .plugin_name = "ProtoPirate Timing Tuner",
-    .kind = ProtoPirateToolScenePluginKindTimingTuner,
-    .set_host_api = timing_tuner_plugin_set_host_api,
-    .on_enter = protopirate_scene_timing_tuner_on_enter,
-    .on_event = protopirate_scene_timing_tuner_on_event,
-    .on_exit = protopirate_scene_timing_tuner_on_exit,
-    .release = NULL,
-};
-
-static const FlipperAppPluginDescriptor protopirate_timing_tuner_plugin_descriptor = {
-    .appid = PROTOPIRATE_TOOL_SCENE_PLUGIN_APP_ID,
-    .ep_api_version = PROTOPIRATE_TOOL_SCENE_PLUGIN_API_VERSION,
-    .entry_point = &protopirate_timing_tuner_plugin,
-};
-
-const FlipperAppPluginDescriptor* protopirate_timing_tuner_plugin_ep(void) {
-    return &protopirate_timing_tuner_plugin_descriptor;
-}
-
-#endif // PROTOPIRATE_TIMING_TUNER_PLUGIN_BUILD
 #endif

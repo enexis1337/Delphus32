@@ -21,7 +21,7 @@
 
 #define NOTIFICATION_SETTINGS_PATH    INT_PATH(".notification.settings")
 #define NOTIFICATION_SETTINGS_MAGIC   0x42
-#define NOTIFICATION_SETTINGS_VERSION 0x0A
+#define NOTIFICATION_SETTINGS_VERSION 0x0B
 
 typedef enum {
     NotificationLayerMessage,
@@ -259,6 +259,9 @@ static void notification_process_notification_message(
         case NotificationMessageTypeForceDisplayBrightnessSetting:
             display_brightness_setting =
                 notification_message->data.forced_settings.display_brightness;
+            break;
+        case NotificationMessageTypeLcdContrastUpdate:
+            furi_hal_display_set_contrast(app->settings.lcd_contrast);
             break;
         default:
             break;
@@ -735,7 +738,7 @@ static NotificationApp* notification_app_alloc(void) {
         furi_timer_alloc(notification_ui_spectrum_tick, FuriTimerTypePeriodic, app);
 
     app->settings.display_brightness = 1.0f;
-    app->settings.display_off_delay_ms = 30000;
+    app->settings.display_off_delay_ms = 10000;
     app->settings.speaker_volume = 1.0f;
     app->settings.vibro_on = true;
     app->settings.night_shift = 1.0f;
@@ -750,16 +753,26 @@ static NotificationApp* notification_app_alloc(void) {
     app->settings.ui_fg_color_index = 0; /* Default: Black (preserves stock contrast) */
     app->settings.ui_custom_color = UI_CUSTOM_DEFAULT_RGB; /* picker start color */
     app->settings.ui_custom_color_set = false; /* no custom color defined yet */
+#ifndef BOARD_LCD_CONTRAST
+#define BOARD_LCD_CONTRAST 26
+#endif
+    app->settings.lcd_contrast = BOARD_LCD_CONTRAST;
     app->current_night_shift = 1.0f;
 
     /* Try to load persisted settings (NVS-backed via saved_struct).
      * Fails silently on first boot or version mismatch — defaults stay in place. */
     notification_load_settings(app);
 
+    if(app->settings.lcd_contrast < 5 || app->settings.lcd_contrast > 60) {
+        app->settings.lcd_contrast = BOARD_LCD_CONTRAST;
+    }
+
     /* Push the loaded LED color to the WS2812 ring. */
     notification_apply_led_color(app);
     /* Push the loaded UI color to the LCD render pipeline. */
     notification_apply_ui_color(app);
+    /* Push the loaded contrast to the display hardware. */
+    furi_hal_display_set_contrast(app->settings.lcd_contrast);
 
     app->display.value[LayerInternal] = 0x00;
     app->display.value[LayerNotification] = 0x00;

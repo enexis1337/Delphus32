@@ -455,6 +455,9 @@ void furi_hal_infrared_async_tx_start(uint32_t freq, float duty_cycle) {
 
     ir_state = InfraredStateAsyncTx;
 
+    FURI_LOG_I("IR_HAL", "TX Start: GPIO=%d, Freq=%lu, Duty=%.2f",
+        IR_TX_GPIO, (unsigned long)freq, (double)duty_cycle);
+
     /* Start TX task */
     xTaskCreate(ir_tx_task, "ir_tx", 4096, NULL, 15, NULL);
 }

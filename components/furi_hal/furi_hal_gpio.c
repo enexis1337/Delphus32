@@ -6,6 +6,7 @@
 #include "furi_hal_gpio.h"
 
 #include <driver/gpio.h>
+#include <esp_attr.h>
 #include <esp_err.h>
 
 static GpioInterrupt furi_hal_gpio_interrupts[GPIO_NUM_MAX] = {0};
@@ -15,7 +16,7 @@ static bool furi_hal_gpio_is_valid(const GpioPin* gpio) {
     return gpio && gpio->pin != UINT16_MAX && gpio->pin < GPIO_NUM_MAX;
 }
 
-static void furi_hal_gpio_isr_handler(void* arg) {
+static void IRAM_ATTR furi_hal_gpio_isr_handler(void* arg) {
     const uint32_t pin = (uint32_t)(uintptr_t)arg;
     if(pin >= GPIO_NUM_MAX) return;
 

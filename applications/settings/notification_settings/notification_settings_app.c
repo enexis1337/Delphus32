@@ -8,6 +8,7 @@
 #include <furi.h>
 #include <furi_hal_rtc.h>
 #include <furi_hal_light.h>
+#include <furi_hal_display.h>
 #include <notification/notification_app.h>
 #include <notification/notification_messages.h>
 #include <gui/modules/variable_item_list.h>
@@ -44,6 +45,29 @@ static const NotificationSequence sequence_note_c = {
     &message_sound_off,
     NULL,
 };
+
+#define CONTRAST_COUNT 41
+const char* const contrast_text[CONTRAST_COUNT] = {
+    "10", "11", "12", "13", "14", "15", "16", "17", "18", "19",
+    "20", "21", "22", "23", "24", "25", "26", "27", "28", "29",
+    "30", "31", "32", "33", "34", "35", "36", "37", "38", "39",
+    "40", "41", "42", "43", "44", "45", "46", "47", "48", "49", "50",
+};
+const uint32_t contrast_value[CONTRAST_COUNT] = {
+    10, 11, 12, 13, 14, 15, 16, 17, 18, 19,
+    20, 21, 22, 23, 24, 25, 26, 27, 28, 29,
+    30, 31, 32, 33, 34, 35, 36, 37, 38, 39,
+    40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50,
+};
+
+static void lcd_contrast_changed(VariableItem* item) {
+    NotificationAppSettings* app = variable_item_get_context(item);
+    uint8_t index = variable_item_get_current_value_index(item);
+    variable_item_set_current_value_text(item, contrast_text[index]);
+    app->notification->settings.lcd_contrast = (uint8_t)contrast_value[index];
+    furi_hal_display_set_contrast(app->notification->settings.lcd_contrast);
+    notification_message_save_settings(app->notification);
+}
 
 #define BACKLIGHT_COUNT 17
 const char* const backlight_text[BACKLIGHT_COUNT] = {
@@ -463,6 +487,16 @@ static NotificationAppSettings* alloc_settings(void) {
         app->notification->settings.display_brightness, backlight_value, BACKLIGHT_COUNT);
     variable_item_set_current_value_index(item, value_index);
     variable_item_set_current_value_text(item, backlight_text[value_index]);
+
+    /* LCD Contrast (for monochrome displays like ST7567) */
+    if(furi_hal_display_has_contrast()) {
+        item = variable_item_list_add(
+            app->variable_item_list, "LCD Contrast", CONTRAST_COUNT, lcd_contrast_changed, app);
+        value_index = value_index_uint32(
+            app->notification->settings.lcd_contrast, contrast_value, CONTRAST_COUNT);
+        variable_item_set_current_value_index(item, value_index);
+        variable_item_set_current_value_text(item, contrast_text[value_index]);
+    }
 
     /* UI Background tint — fills the field around drawn UI elements
      * (default Orange). Presets end with "Spectrum" (HSV cycle), then a

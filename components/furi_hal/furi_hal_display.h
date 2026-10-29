@@ -34,6 +34,27 @@ void furi_hal_display_commit(const uint8_t* data, uint32_t size);
  */
 void furi_hal_display_set_backlight(uint8_t brightness);
 
+/** Check if display backlight is currently turned on
+ *
+ * @return     true if backlight brightness > 0, false if off / asleep
+ */
+bool furi_hal_display_is_backlight_on(void);
+
+/** Check if display supports contrast adjustment (e.g. ST7567) */
+bool furi_hal_display_has_contrast(void);
+
+/** Set display contrast (for monochrome displays like ST7567)
+ *
+ * @param      contrast  contrast value [0..63] (0x00..0x3F)
+ */
+void furi_hal_display_set_contrast(uint8_t contrast);
+
+/** Get current display contrast
+ *
+ * @return     contrast value [0..63]
+ */
+uint8_t furi_hal_display_get_contrast(void);
+
 /** Put the display panel into sleep mode (ST7789 SLPIN + display off).
  *
  * Intended for the power-off / deep-sleep path: the panel keeps drawing

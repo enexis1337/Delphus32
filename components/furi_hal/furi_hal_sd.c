@@ -26,7 +26,7 @@ static const char* TAG = "FuriHalSd";
 
 #define SD_FATFS_DRIVE "0:"
 #define SD_SPI_HOST    SPI2_HOST
-#define SD_MAX_FREQ    (20 * 1000) /* 20 MHz — conservative for shared bus */
+#define SD_MAX_FREQ    (4 * 1000)  /* 4 MHz — reduced for shared SPI bus stability */
 #define SD_BOUNCE_SECTORS 8 /* 4 KiB persistent DMA bounce buffer */
 
 static sdmmc_card_t* sd_card = NULL;
@@ -381,36 +381,37 @@ static DRESULT sd_fatfs_read(BYTE pdrv, BYTE* buff, DWORD sector, UINT count) {
         return RES_PARERR;
     }
 
+    if(!sd_ensure_bounce_buf()) {
+        return RES_ERROR;
+    }
+
     esp_err_t err = ESP_OK;
     furi_hal_spi_bus_lock();
 
-    if(sd_buf_is_dma_capable(buff)) {
-        err = sdmmc_read_sectors(sd_card, buff, sector, count);
-    } else if(sd_ensure_bounce_buf()) {
-        /* PSRAM destination: stage through persistent DMA-capable buffer.
-         * This avoids ESP-IDF allocating a per-call temp buffer that fails
-         * once the internal DMA heap is fragmented. */
-        const size_t block_size = sd_card->csd.sector_size;
-        UINT remaining = count;
-        DWORD cur_sector = sector;
-        BYTE* cur_dst = buff;
-        while(remaining > 0) {
-            UINT chunk = remaining > SD_BOUNCE_SECTORS ? SD_BOUNCE_SECTORS : remaining;
+    const size_t block_size = sd_card->csd.sector_size ? sd_card->csd.sector_size : 512;
+    UINT remaining = count;
+    DWORD cur_sector = sector;
+    BYTE* cur_dst = buff;
+
+    while(remaining > 0) {
+        UINT chunk = remaining > SD_BOUNCE_SECTORS ? SD_BOUNCE_SECTORS : remaining;
+        for(int retry = 0; retry < 3; retry++) {
             err = sdmmc_read_sectors(sd_card, sd_bounce_buf, cur_sector, chunk);
-            if(err != ESP_OK) break;
-            memcpy(cur_dst, sd_bounce_buf, block_size * chunk);
-            cur_dst += block_size * chunk;
-            cur_sector += chunk;
-            remaining -= chunk;
+            if(err == ESP_OK) break;
+            furi_delay_ms(2);
         }
-    } else {
-        err = ESP_ERR_NO_MEM;
+        if(err != ESP_OK) break;
+
+        memcpy(cur_dst, sd_bounce_buf, block_size * chunk);
+        cur_dst += block_size * chunk;
+        cur_sector += chunk;
+        remaining -= chunk;
     }
 
     furi_hal_spi_bus_unlock();
 
     if(err != ESP_OK) {
-        ESP_LOGE(TAG, "SD read failed: %s", esp_err_to_name(err));
+        ESP_LOGE(TAG, "SD read failed at sector %lu: %s", (unsigned long)cur_sector, esp_err_to_name(err));
         return RES_ERROR;
     }
 
@@ -422,33 +423,38 @@ static DRESULT sd_fatfs_write(BYTE pdrv, const BYTE* buff, DWORD sector, UINT co
         return RES_PARERR;
     }
 
+    if(!sd_ensure_bounce_buf()) {
+        return RES_ERROR;
+    }
+
     esp_err_t err = ESP_OK;
     furi_hal_spi_bus_lock();
 
-    if(sd_buf_is_dma_capable(buff)) {
-        err = sdmmc_write_sectors(sd_card, buff, sector, count);
-    } else if(sd_ensure_bounce_buf()) {
-        const size_t block_size = sd_card->csd.sector_size;
-        UINT remaining = count;
-        DWORD cur_sector = sector;
-        const BYTE* cur_src = buff;
-        while(remaining > 0) {
-            UINT chunk = remaining > SD_BOUNCE_SECTORS ? SD_BOUNCE_SECTORS : remaining;
-            memcpy(sd_bounce_buf, cur_src, block_size * chunk);
+    const size_t block_size = sd_card->csd.sector_size ? sd_card->csd.sector_size : 512;
+    UINT remaining = count;
+    DWORD cur_sector = sector;
+    const BYTE* cur_src = buff;
+
+    while(remaining > 0) {
+        UINT chunk = remaining > SD_BOUNCE_SECTORS ? SD_BOUNCE_SECTORS : remaining;
+        memcpy(sd_bounce_buf, cur_src, block_size * chunk);
+
+        for(int retry = 0; retry < 3; retry++) {
             err = sdmmc_write_sectors(sd_card, sd_bounce_buf, cur_sector, chunk);
-            if(err != ESP_OK) break;
-            cur_src += block_size * chunk;
-            cur_sector += chunk;
-            remaining -= chunk;
+            if(err == ESP_OK) break;
+            furi_delay_ms(2);
         }
-    } else {
-        err = ESP_ERR_NO_MEM;
+        if(err != ESP_OK) break;
+
+        cur_src += block_size * chunk;
+        cur_sector += chunk;
+        remaining -= chunk;
     }
 
     furi_hal_spi_bus_unlock();
 
     if(err != ESP_OK) {
-        ESP_LOGE(TAG, "SD write failed: %s", esp_err_to_name(err));
+        ESP_LOGE(TAG, "SD write failed at sector %lu: %s", (unsigned long)cur_sector, esp_err_to_name(err));
         return RES_ERROR;
     }
 

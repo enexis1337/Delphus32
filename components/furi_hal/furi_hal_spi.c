@@ -70,7 +70,7 @@ FuriHalSpiBusHandle furi_hal_spi_bus_handle_subghz = {
     .cs = &gpio_ext_pa4,
     .device = NULL,
     .initialized = false,
-    .frequency_hz = 100 * 1000,
+    .frequency_hz = 1 * 1000 * 1000,
     .mode = 0,
 };
 
@@ -151,7 +151,7 @@ static bool furi_hal_spi_bus_init_if_needed(FuriHalSpiBus* bus, const FuriHalSpi
         .sclk_io_num = handle->sck->pin,
         .quadwp_io_num = -1,
         .quadhd_io_num = -1,
-        .max_transfer_sz = 4096,
+        .max_transfer_sz = 16384,
     };
 
     esp_err_t err = spi_bus_initialize(bus->host_id, &bus_config, SPI_DMA_CH_AUTO);
@@ -195,10 +195,15 @@ void furi_hal_spi_bus_handle_init(const FuriHalSpiBusHandle* handle) {
         return;
     }
 
+    if(furi_hal_spi_pin_valid(handle->cs)) {
+        furi_hal_gpio_init_simple(handle->cs, GpioModeOutputPushPull);
+        furi_hal_gpio_write(handle->cs, true);
+    }
+
     spi_device_interface_config_t dev_config = {
-        .clock_speed_hz = mutable_handle->frequency_hz ? (int)mutable_handle->frequency_hz : 2 * 1000 * 1000,
+        .clock_speed_hz = mutable_handle->frequency_hz ? (int)mutable_handle->frequency_hz : 1000 * 1000,
         .mode = mutable_handle->mode,
-        .spics_io_num = handle->cs->pin,
+        .spics_io_num = -1,
         .queue_size = 1,
         .flags = 0,
     };
@@ -234,14 +239,14 @@ void furi_hal_spi_acquire(const FuriHalSpiBusHandle* handle) {
     FuriHalSpiBus* bus = mutable_handle->bus;
     furi_check(bus);
 
-    furi_hal_spi_bus_handle_init(handle);
 #if BOARD_CC1101_SPI_SHARED
-    /* On shared-bus boards, also lock the global SPI bus mutex
+    /* On shared-bus boards, lock the global SPI bus mutex first
      * to serialize with display DMA and SD card transactions */
     if(!bus->bitbang) {
         furi_hal_spi_bus_lock();
     }
 #endif
+    furi_hal_spi_bus_handle_init(handle);
     furi_check(furi_mutex_acquire(furi_hal_spi_get_mutex(bus), FuriWaitForever) == FuriStatusOk);
     furi_hal_power_insomnia_enter();
     bus->current_handle = handle;
@@ -320,6 +325,18 @@ bool furi_hal_spi_bus_trx(
         return true;
     }
 
+    if(furi_hal_spi_pin_valid(handle->cs)) {
+        furi_hal_gpio_write(handle->cs, false);
+        if(furi_hal_spi_pin_valid(handle->miso)) {
+            uint32_t timeout_us = 1000;
+            while(furi_hal_gpio_read(handle->miso) && timeout_us--) {
+                esp_rom_delay_us(1);
+            }
+        } else {
+            esp_rom_delay_us(5);
+        }
+    }
+
     spi_transaction_t transaction = {
         .length = size * 8,
         .tx_buffer = tx_buffer,
@@ -328,6 +345,12 @@ bool furi_hal_spi_bus_trx(
 
     esp_err_t err =
         spi_device_polling_transmit((spi_device_handle_t)handle->device, &transaction);
+
+    if(furi_hal_spi_pin_valid(handle->cs)) {
+        furi_hal_gpio_write(handle->cs, true);
+        esp_rom_delay_us(2);
+    }
+
     if(err != ESP_OK) {
         ESP_LOGW(TAG, "spi_device_polling_transmit failed: %s", esp_err_to_name(err));
         furi_hal_spi_fill_stub_rx(rx_buffer, size);

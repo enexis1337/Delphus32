@@ -1,0 +1,13 @@
+# Target labels
+ bootloader
+# Source files and their labels
+C:/Users/dfili/Downloads/Flipper-Zero-ESP32-Port-1.1.5/build_esp32s3_st7567/CMakeFiles/bootloader
+C:/Users/dfili/Downloads/Flipper-Zero-ESP32-Port-1.1.5/build_esp32s3_st7567/CMakeFiles/bootloader.rule
+C:/Users/dfili/Downloads/Flipper-Zero-ESP32-Port-1.1.5/build_esp32s3_st7567/CMakeFiles/bootloader-complete.rule
+C:/Users/dfili/Downloads/Flipper-Zero-ESP32-Port-1.1.5/build_esp32s3_st7567/bootloader-prefix/src/bootloader-stamp/bootloader-build.rule
+C:/Users/dfili/Downloads/Flipper-Zero-ESP32-Port-1.1.5/build_esp32s3_st7567/bootloader-prefix/src/bootloader-stamp/bootloader-configure.rule
+C:/Users/dfili/Downloads/Flipper-Zero-ESP32-Port-1.1.5/build_esp32s3_st7567/bootloader-prefix/src/bootloader-stamp/bootloader-download.rule
+C:/Users/dfili/Downloads/Flipper-Zero-ESP32-Port-1.1.5/build_esp32s3_st7567/bootloader-prefix/src/bootloader-stamp/bootloader-install.rule
+C:/Users/dfili/Downloads/Flipper-Zero-ESP32-Port-1.1.5/build_esp32s3_st7567/bootloader-prefix/src/bootloader-stamp/bootloader-mkdir.rule
+C:/Users/dfili/Downloads/Flipper-Zero-ESP32-Port-1.1.5/build_esp32s3_st7567/bootloader-prefix/src/bootloader-stamp/bootloader-patch.rule
+C:/Users/dfili/Downloads/Flipper-Zero-ESP32-Port-1.1.5/build_esp32s3_st7567/bootloader-prefix/src/bootloader-stamp/bootloader-update.rule

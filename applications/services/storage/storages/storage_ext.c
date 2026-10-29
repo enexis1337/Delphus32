@@ -598,6 +598,16 @@ static bool storage_ext_dir_rewind(void* ctx, File* file) {
 
 static FS_Error storage_ext_common_stat(void* ctx, const char* path, FileInfo* fileinfo) {
     UNUSED(ctx);
+
+    /* FatFS f_stat cannot handle root path "" or "/" — special-case it */
+    if(path == NULL || path[0] == '\0' || (path[0] == '/' && path[1] == '\0')) {
+        if(fileinfo != NULL) {
+            fileinfo->size = 0;
+            fileinfo->flags = FSF_DIRECTORY;
+        }
+        return FSE_OK;
+    }
+
     SDFileInfo _fileinfo;
     SDError result = f_stat(path, &_fileinfo);
 

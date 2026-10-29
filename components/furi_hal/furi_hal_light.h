@@ -24,6 +24,12 @@ void furi_hal_light_init(void);
  */
 void furi_hal_light_set(Light light, uint8_t value);
 
+/** Check if display backlight is currently turned on
+ *
+ * @return     true if backlight brightness > 0, false if off / asleep
+ */
+bool furi_hal_light_is_backlight_on(void);
+
 /** Start hardware LED blinking mode
  *
  * @param      light  Light

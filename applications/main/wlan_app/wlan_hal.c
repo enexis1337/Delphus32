@@ -15,9 +15,7 @@
 #include <stdlib.h>
 
 #define TAG "WlanHal"
-// Worker macht esp_wifi/lwIP-Calls; 4096 Words (16 KB) statt 8192 (32 KB),
-// um internes RAM für esp_wifi_init zu sparen. Bei Stack-Overflow erhöhen.
-#define WLAN_HAL_WORKER_STACK 4096
+#define WLAN_HAL_WORKER_STACK 8192
 
 typedef enum {
     WCMD_INIT_START,

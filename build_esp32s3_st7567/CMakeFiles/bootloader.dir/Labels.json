@@ -1,0 +1,43 @@
+{
+	"sources" : 
+	[
+		{
+			"file" : "C:/Users/dfili/Downloads/Flipper-Zero-ESP32-Port-1.1.5/build_esp32s3_st7567/CMakeFiles/bootloader"
+		},
+		{
+			"file" : "C:/Users/dfili/Downloads/Flipper-Zero-ESP32-Port-1.1.5/build_esp32s3_st7567/CMakeFiles/bootloader.rule"
+		},
+		{
+			"file" : "C:/Users/dfili/Downloads/Flipper-Zero-ESP32-Port-1.1.5/build_esp32s3_st7567/CMakeFiles/bootloader-complete.rule"
+		},
+		{
+			"file" : "C:/Users/dfili/Downloads/Flipper-Zero-ESP32-Port-1.1.5/build_esp32s3_st7567/bootloader-prefix/src/bootloader-stamp/bootloader-build.rule"
+		},
+		{
+			"file" : "C:/Users/dfili/Downloads/Flipper-Zero-ESP32-Port-1.1.5/build_esp32s3_st7567/bootloader-prefix/src/bootloader-stamp/bootloader-configure.rule"
+		},
+		{
+			"file" : "C:/Users/dfili/Downloads/Flipper-Zero-ESP32-Port-1.1.5/build_esp32s3_st7567/bootloader-prefix/src/bootloader-stamp/bootloader-download.rule"
+		},
+		{
+			"file" : "C:/Users/dfili/Downloads/Flipper-Zero-ESP32-Port-1.1.5/build_esp32s3_st7567/bootloader-prefix/src/bootloader-stamp/bootloader-install.rule"
+		},
+		{
+			"file" : "C:/Users/dfili/Downloads/Flipper-Zero-ESP32-Port-1.1.5/build_esp32s3_st7567/bootloader-prefix/src/bootloader-stamp/bootloader-mkdir.rule"
+		},
+		{
+			"file" : "C:/Users/dfili/Downloads/Flipper-Zero-ESP32-Port-1.1.5/build_esp32s3_st7567/bootloader-prefix/src/bootloader-stamp/bootloader-patch.rule"
+		},
+		{
+			"file" : "C:/Users/dfili/Downloads/Flipper-Zero-ESP32-Port-1.1.5/build_esp32s3_st7567/bootloader-prefix/src/bootloader-stamp/bootloader-update.rule"
+		}
+	],
+	"target" : 
+	{
+		"labels" : 
+		[
+			"bootloader"
+		],
+		"name" : "bootloader"
+	}
+}

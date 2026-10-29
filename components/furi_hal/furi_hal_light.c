@@ -88,56 +88,65 @@ static void furi_hal_light_ws2812_init(void) {
 #endif
 
 void furi_hal_light_init(void) {
-    /* Release any deep-sleep GPIO hold on the backlight pin. The power-off path
-     * latches this pin LOW with gpio_hold so the backlight stays off in deep
-     * sleep; the latch survives the deep-sleep wake reset, so we must clear it
-     * here before LEDC can drive the pin again. No-op on a cold boot. */
-    gpio_hold_dis((gpio_num_t)gpio_lcd_bl.pin);
+    if(gpio_lcd_bl.pin != UINT16_MAX) {
+        /* Release any deep-sleep GPIO hold on the backlight pin */
+        gpio_hold_dis((gpio_num_t)gpio_lcd_bl.pin);
 
-    /* Configure LEDC timer for backlight PWM */
-    ledc_timer_config_t timer_conf = {
-        .speed_mode = BACKLIGHT_LEDC_SPEED,
-        .duty_resolution = BACKLIGHT_LEDC_DUTY_RES,
-        .timer_num = BACKLIGHT_LEDC_TIMER,
-        .freq_hz = BACKLIGHT_LEDC_FREQ,
-        .clk_cfg = LEDC_AUTO_CLK,
-    };
-    ESP_ERROR_CHECK(ledc_timer_config(&timer_conf));
+        /* Configure LEDC timer for backlight PWM */
+        ledc_timer_config_t timer_conf = {
+            .speed_mode = BACKLIGHT_LEDC_SPEED,
+            .duty_resolution = BACKLIGHT_LEDC_DUTY_RES,
+            .timer_num = BACKLIGHT_LEDC_TIMER,
+            .freq_hz = BACKLIGHT_LEDC_FREQ,
+            .clk_cfg = LEDC_AUTO_CLK,
+        };
+        ESP_ERROR_CHECK(ledc_timer_config(&timer_conf));
 
-    /* Configure LEDC channel on backlight pin */
-    ledc_channel_config_t channel_conf = {
-        .speed_mode = BACKLIGHT_LEDC_SPEED,
-        .channel = BACKLIGHT_LEDC_CHANNEL,
-        .timer_sel = BACKLIGHT_LEDC_TIMER,
-        .intr_type = LEDC_INTR_DISABLE,
-        .gpio_num = gpio_lcd_bl.pin,
-        .duty = furi_hal_light_backlight_duty_from_value(255),
-        .hpoint = 0,
-    };
-    ESP_ERROR_CHECK(ledc_channel_config(&channel_conf));
+        /* Configure LEDC channel on backlight pin */
+        ledc_channel_config_t channel_conf = {
+            .speed_mode = BACKLIGHT_LEDC_SPEED,
+            .channel = BACKLIGHT_LEDC_CHANNEL,
+            .timer_sel = BACKLIGHT_LEDC_TIMER,
+            .intr_type = LEDC_INTR_DISABLE,
+            .gpio_num = gpio_lcd_bl.pin,
+            .duty = furi_hal_light_backlight_duty_from_value(255),
+            .hpoint = 0,
+        };
+        ESP_ERROR_CHECK(ledc_channel_config(&channel_conf));
 
-    ESP_LOGI(TAG, "Backlight PWM initialized on GPIO%d", gpio_lcd_bl.pin);
+        ESP_LOGI(TAG, "Backlight PWM initialized on GPIO%d", gpio_lcd_bl.pin);
+    }
 
-#ifdef BOARD_PIN_WS2812_DATA
+#if defined(BOARD_PIN_WS2812_DATA) && (BOARD_PIN_WS2812_DATA != UINT16_MAX) && (BOARD_WS2812_LED_COUNT > 0)
     furi_hal_light_ws2812_init();
 #endif
 }
 
+static volatile uint8_t backlight_current_duty = 255;
+
 void furi_hal_light_set(Light light, uint8_t value) {
-    if(light & LightBacklight) {
+    if((light & LightBacklight) && (gpio_lcd_bl.pin != UINT16_MAX)) {
+        backlight_current_duty = value;
         ledc_set_duty(
             BACKLIGHT_LEDC_SPEED,
             BACKLIGHT_LEDC_CHANNEL,
             furi_hal_light_backlight_duty_from_value(value));
         ledc_update_duty(BACKLIGHT_LEDC_SPEED, BACKLIGHT_LEDC_CHANNEL);
     }
-#ifdef BOARD_PIN_WS2812_DATA
+#if defined(BOARD_PIN_WS2812_DATA) && (BOARD_PIN_WS2812_DATA != UINT16_MAX) && (BOARD_WS2812_LED_COUNT > 0)
     bool rgb_changed = false;
     if(light & LightRed)   { led_r = value; rgb_changed = true; }
     if(light & LightGreen) { led_g = value; rgb_changed = true; }
     if(light & LightBlue)  { led_b = value; rgb_changed = true; }
     if(rgb_changed) furi_hal_light_ws2812_push();
 #endif
+}
+
+bool furi_hal_light_is_backlight_on(void) {
+    if(gpio_lcd_bl.pin == UINT16_MAX) {
+        return true;
+    }
+    return backlight_current_duty > 0;
 }
 
 void furi_hal_light_blink_start(Light light, uint8_t brightness, uint16_t on_time, uint16_t period) {
@@ -158,7 +167,7 @@ void furi_hal_light_sequence(const char* sequence) {
     (void)sequence;
 }
 
-#ifdef BOARD_PIN_WS2812_DATA
+#if defined(BOARD_PIN_WS2812_DATA) && (BOARD_PIN_WS2812_DATA != UINT16_MAX) && (BOARD_WS2812_LED_COUNT > 0)
 void furi_hal_light_set_rgb_all(uint8_t r, uint8_t g, uint8_t b) {
     led_r = r; led_g = g; led_b = b;
     if(!led_strip) return;

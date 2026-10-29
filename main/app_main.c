@@ -2,6 +2,7 @@
 #include <furi_hal.h>
 #include <flipper.h>
 #include <applications.h>
+#include <embedded_resources.h>
 
 #include <esp_log.h>
 #include <esp_rom_uart.h>
@@ -146,6 +147,9 @@ void app_main(void) {
     for(size_t i = 0; i < FLIPPER_ON_SYSTEM_START_COUNT; i++) {
         FLIPPER_ON_SYSTEM_START[i]();
     }
+
+    /* Auto-deploy embedded IR database files to SD card */
+    embedded_resources_start_async();
 
     ESP_LOGI(TAG, "All services started, entering background...");
 

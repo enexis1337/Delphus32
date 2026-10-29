@@ -25,6 +25,9 @@ static const NotificationSequence*
 };
 
 static void infrared_make_app_folder(InfraredApp* infrared) {
+    if(storage_dir_exists(infrared->storage, INFRARED_APP_FOLDER)) {
+        return;
+    }
     if(!storage_simply_mkdir(infrared->storage, INFRARED_APP_FOLDER)) {
         infrared_show_error_message(infrared, "Cannot create\napp folder");
     }
@@ -206,10 +209,6 @@ static InfraredApp* infrared_alloc(void) {
     view_dispatcher_add_view(
         view_dispatcher, InfraredViewStack, view_stack_get_view(infrared->view_stack));
 
-    infrared->widget = widget_alloc();
-    view_dispatcher_add_view(
-        view_dispatcher, InfraredViewWidget, widget_get_view(infrared->widget));
-
     infrared->move_view = infrared_move_view_alloc();
     view_dispatcher_add_view(
         view_dispatcher, InfraredViewMove, infrared_move_view_get_view(infrared->move_view));
@@ -267,9 +266,6 @@ static void infrared_free(InfraredApp* infrared) {
 
     view_dispatcher_remove_view(view_dispatcher, InfraredViewStack);
     view_stack_free(infrared->view_stack);
-
-    view_dispatcher_remove_view(view_dispatcher, InfraredViewWidget);
-    widget_free(infrared->widget);
 
     view_dispatcher_remove_view(view_dispatcher, InfraredViewMove);
     infrared_move_view_free(infrared->move_view);

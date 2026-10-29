@@ -26,10 +26,7 @@ APPS = [
     "power_settings",
     "loader",
     "loader_start",
-    "namechanger_srv",
-    "spoofing_settings",
     "notification_settings",
-    "interface_settings",
     "desktop",
     "archive",
     "about",
@@ -79,8 +76,8 @@ APPS = [
 
 # Boards without NFC / IR hardware – exclude the corresponding apps
 _board = os.environ.get("FLIPPER_BOARD", "")
-_boards_without_nfc = {"waveshare_c6_1.9", "waveshare_c6_1.47", "Delphus"}
-_boards_without_ir = {"waveshare_c6_1.9", "waveshare_c6_1.47", "Delphus"}
+_boards_without_nfc = {"waveshare_c6_1.9", "waveshare_c6_1.47"}
+_boards_without_ir = {"waveshare_c6_1.9", "waveshare_c6_1.47"}
 
 # Wolf3D shares Doom's requirements (PSRAM, ST7789 320xN, I2S speaker).
 # Doom läuft ebenfalls nur auf T-Embed (PSRAM + 16 MB Flash) — wird aber als
@@ -96,7 +93,7 @@ _boards_without_subghz = {"waveshare_c6_1.47"}
 
 # NRF24 plugs into the LORA slot (T-Embed CC1101). Boards without the slot
 # don't have the required pin defines.
-_boards_without_nrf24 = {"waveshare_c6_1.9", "waveshare_c6_1.47", "Delphus"}
+_boards_without_nrf24 = {"waveshare_c6_1.9", "waveshare_c6_1.47"}
 
 if _board in _boards_without_ir:
     APPS = [a for a in APPS if a not in ("infrared", "js_infrared")]
@@ -113,10 +110,11 @@ if _board in _boards_without_nrf24:
 # while opening RECORD_DOLPHIN. Dropping either breaks the link / hangs the UI,
 # so they stay. The real RAM wins are BLE-off (~68KB) + smaller WiFi buffers.
 
-# qFlipper and USB-Storage are no longer standalone apps — they live in the
-# desktop lock menu (applications/services/desktop). The menu gates them itself:
-# qFlipper / USB-Storage behind a compile-time USB-OTG check (ESP32-S3/S2 only).
-# So there is nothing to exclude here per board anymore.
+# qFlipper, USB-Storage and "Switch to Bruce" are no longer standalone apps —
+# they live in the desktop lock menu (applications/services/desktop). The menu
+# gates them itself: qFlipper / USB-Storage behind a compile-time USB-OTG check
+# (ESP32-S3/S2 only), Bruce behind a runtime ota_1-partition check. So there is
+# nothing to exclude here per board anymore.
 # Note: nothing installs the TinyUSB composite at boot — doing so would switch
 # the internal USB PHY to OTG and kill the USB-Serial-JTAG bridge that esptool
 # uses, breaking the next `./buildAndFlash_T-Embed.sh` cycle. The composite is

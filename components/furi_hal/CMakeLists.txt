@@ -3,7 +3,6 @@
 #   waveshare_c6_1.9        - Waveshare ESP32-C6-LCD-1.9 (default, touch input)
 #   waveshare_c6_1.47       - Waveshare ESP32-C6-LCD-1.47 (touch input + IMU)
 #   lilygo_t_embed_cc1101   - LilyGo T-Embed CC1101 (ESP32-S3, encoder input, CC1101/NFC/IR)
-#   Delphus                  - DIY ESP32-S3 with 2.8" TFT + 6 buttons
 if(NOT DEFINED FLIPPER_BOARD)
     set(FLIPPER_BOARD "waveshare_c6_1.9" CACHE STRING "Target board for Flipper ESP32 port")
 endif()
@@ -49,7 +48,6 @@ set(FURI_HAL_REQUIRES
     furi toolbox input driver esp_lcd fatfs sdmmc datetime
     ble_hid ble_serial ble_profile furi_ble flipper_protobuf
     esp_adc esp_driver_rmt esp_driver_i2s nvs_flash
-    app_update esp_partition
 )
 
 # HID backend: TinyUSB on SoCs with USB-OTG, stub elsewhere.

@@ -1,6 +1,7 @@
 #pragma once
 
 enum SubmenuIndex {
+    SubmenuIndexCC1101Test = 9,
     SubmenuIndexRead = 10,
     SubmenuIndexSaved,
     SubmenuIndexAddManually,
@@ -12,6 +13,4 @@ enum SubmenuIndex {
     SubmenuIndexExtSettings,
     SubmenuIndexRadioSetting,
     SubmenuIndexPlaylist,
-    SubmenuIndexWmBurst,
-    SubmenuIndexProtoPirate,
 };
